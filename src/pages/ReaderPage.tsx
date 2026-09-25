@@ -5,14 +5,17 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PageMap, type Measurer } from '../core/pagination'
-import { getBook, getProgress, saveProgress } from '../core/bookRepository'
+import { buildToc, currentChapterIndex, type Toc, type TocEntry } from '../core/toc'
+import { getBook, getProgress, saveProgress, updateBookTocPattern } from '../core/bookRepository'
 import {
   applySettingsToDocument,
   clampFontSize,
   loadSettings,
   nextLineHeight,
+  nextTheme,
   saveSettings,
   FONT_STEP,
+  THEME_LABELS,
   type ReaderSettings,
 } from '../core/settings'
 
@@ -66,6 +69,9 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [settings, setSettings] = useState<ReaderSettings>(() => loadSettings())
   const [ready, setReady] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [toc, setToc] = useState<Toc>({ entries: [], source: 'none' })
+  const [tocOpen, setTocOpen] = useState(false)
+  const [patternDraft, setPatternDraft] = useState('')
 
   const textRef = useRef('')
   const pagemapRef = useRef<PageMap | null>(null)
@@ -109,6 +115,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setTitle(book.title)
       setTotalChars(pm.totalChars)
       setPage({ ...pm.current })
+      setToc(buildToc(book.content, book.tocPattern))
+      setPatternDraft(book.tocPattern ?? '')
       setReady(true)
       // 打开即记一次"最后阅读时间"
       void saveProgress(bookId, pm.current.start)
@@ -188,6 +196,40 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     showToast(`行距 ${next.lineHeight}`)
   }, [settings, commitSettings, showToast])
 
+  /** 主题只切换颜色不改版式，无需分页重排。 */
+  const cycleTheme = useCallback(() => {
+    const next = { ...settings, theme: nextTheme(settings.theme) }
+    setSettings(next)
+    saveSettings(next)
+    applySettingsToDocument(next)
+    showToast(`主题 ${THEME_LABELS[next.theme]}`)
+  }, [settings, showToast])
+
+  /** 目录跳转：与进度条共用 PageMap.jumpTo，同一字符偏移坐标系。 */
+  const jumpToChapter = useCallback(
+    (entry: TocEntry) => {
+      const pm = pagemapRef.current
+      if (!pm) return
+      pm.jumpTo(entry.charIndex)
+      setPage({ ...pm.current })
+      void saveProgress(bookId, pm.current.start)
+      setTocOpen(false)
+    },
+    [bookId],
+  )
+
+  /** 应用自定义章节正则（保存到书籍记录，空串恢复内置模式）。 */
+  const applyPattern = useCallback(async () => {
+    const t = buildToc(textRef.current, patternDraft)
+    if (t.error) {
+      setToc(t)
+      return
+    }
+    await updateBookTocPattern(bookId, patternDraft)
+    setToc(t)
+    showToast(t.entries.length > 0 ? `已识别 ${t.entries.length} 章` : '未识别到章节')
+  }, [patternDraft, bookId, showToast])
+
   // ---- 键盘：←/→、PageUp/PageDown、空格翻页，Esc 返回书库 ----
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -228,6 +270,14 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const percent = totalChars > 1 ? (page.end >= totalChars ? 1 : page.start / (totalChars - 1)) : 0
   const pageText = ready ? textRef.current.slice(page.start, page.end) : ''
+  const chapterIdx = toc.entries.length > 0 ? currentChapterIndex(toc.entries, page.start) : -1
+  const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
+
+  // 打开目录时把当前章节滚到可见区域中央
+  useEffect(() => {
+    if (!tocOpen) return
+    document.querySelector('.toc-item.active')?.scrollIntoView({ block: 'center' })
+  }, [tocOpen, chapterIdx])
 
   return (
     <section className={`reader${chromeVisible ? '' : ' chrome-hidden'}`}>
@@ -235,8 +285,16 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         <button className="btn ghost" onClick={onBack}>
           ‹ 书库
         </button>
-        <div className="reader-title" title={title}>
-          {title}
+        <div className="reader-title">
+          <span className="reader-book">{title}</span>
+          {chapterTitle && <span className="reader-chapter">{chapterTitle}</span>}
+        </div>
+        <div className="top-actions">
+          {toc.entries.length > 0 && (
+            <button className="btn ghost" onClick={() => setTocOpen(true)}>
+              目录
+            </button>
+          )}
         </div>
         <div className="top-spacer" />
       </header>
@@ -280,9 +338,61 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
             <button className="btn chip" title="切换行距" onClick={cycleLineHeight}>
               行距 {settings.lineHeight}
             </button>
+            <button className="btn chip" title="切换主题（日间/护眼/夜间）" onClick={cycleTheme}>
+              主题 {THEME_LABELS[settings.theme]}
+            </button>
           </div>
         </div>
       </footer>
+
+      {/* 目录抽屉（V1.1） */}
+      {tocOpen && (
+        <div className="toc-mask" onClick={() => setTocOpen(false)}>
+          <aside className="toc-drawer" onClick={(e) => e.stopPropagation()}>
+            <header className="toc-header">
+              <span>目录</span>
+              <span className="toc-count">
+                {toc.source === 'custom' ? '自定义正则 · ' : ''}
+                {toc.entries.length} 章
+              </span>
+              <button className="btn ghost" onClick={() => setTocOpen(false)}>
+                关闭
+              </button>
+            </header>
+            <div className="toc-list">
+              {toc.entries.map((entry, i) => (
+                <button
+                  key={entry.charIndex}
+                  className={`toc-item${i === chapterIdx ? ' active' : ''}`}
+                  onClick={() => jumpToChapter(entry)}
+                >
+                  <span className="toc-name">{entry.title}</span>
+                  <span className="toc-percent">
+                    {totalChars > 1
+                      ? Math.round((entry.charIndex / (totalChars - 1)) * 100) + '%'
+                      : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <footer className="toc-footer">
+              <input
+                className="toc-pattern-input"
+                value={patternDraft}
+                placeholder="自定义章节正则（可选，如 ^\\d+$）"
+                onChange={(e) => setPatternDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void applyPattern()
+                }}
+              />
+              <button className="btn chip" onClick={() => void applyPattern()}>
+                应用
+              </button>
+              {toc.error && <div className="toc-error">{toc.error}</div>}
+            </footer>
+          </aside>
+        </div>
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </section>

@@ -51,6 +51,13 @@ describe('buildToc: 内置模式', () => {
     expect(titles).toContain('卷一 起势')
   })
 
+  it('识别圆圈"○"计数的整十回数（部分古登堡/老版排印用 ○ 代零）', () => {
+    const { text } = build(['第一○回 龍王拙計', '正文。', '第二○回 黃風嶺', '正文。'])
+    const titles = buildToc(text).entries.map((e) => e.title)
+    expect(titles).toContain('第一○回 龍王拙計')
+    expect(titles).toContain('第二○回 黃風嶺')
+  })
+
   it('"第一章"开头的长正文行不会被误认为章节', () => {
     const long = '第一章' + '今天天气很好'.repeat(20)
     const { text } = build([long, '第二章 正常章节', '正文。'])

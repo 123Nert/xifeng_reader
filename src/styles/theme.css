@@ -23,6 +23,33 @@
   --ui-font: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
 
+/* 护眼主题（V1.1）：米黄底、暖褐字 */
+[data-theme='sepia'] {
+  --bg: #f4ecdb;
+  --panel: #faf3e2;
+  --panel-translucent: rgba(250, 243, 226, 0.94);
+  --text: #403423;
+  --muted: #99896b;
+  --border: #e2d5b8;
+  --accent: #8a6a3f;
+  --accent-soft: #ecdfc0;
+  --shadow: 0 10px 30px rgba(90, 70, 40, 0.12);
+}
+
+/* 夜间主题（V1.1）：深灰底、柔灰字（不用纯白刺眼） */
+[data-theme='dark'] {
+  --bg: #141519;
+  --panel: #1d1f24;
+  --panel-translucent: rgba(29, 31, 36, 0.94);
+  --text: #c6c4bf;
+  --muted: #767880;
+  --border: #30333a;
+  --accent: #4f9d7c;
+  --accent-soft: #24342b;
+  --danger: #c26a52;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -39,6 +66,8 @@ body {
   color: var(--text);
   font-family: var(--ui-font);
   -webkit-font-smoothing: antialiased;
+  /* 主题切换时颜色平滑过渡 */
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 button {
@@ -373,12 +402,35 @@ button {
 
 .reader-title {
   flex: 1;
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.reader-book {
   font-size: 15px;
   font-weight: 600;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.reader-chapter {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .top-spacer {
@@ -406,6 +458,141 @@ button {
 .font-controls {
   display: flex;
   gap: 8px;
+}
+
+/* ========== 目录抽屉（V1.1） ========== */
+
+.toc-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 40;
+  animation: fade-in 0.2s ease;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.toc-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(340px, 88vw);
+  background: var(--panel);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.2);
+  animation: slide-in 0.22s ease;
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.toc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.toc-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  flex: 1;
+}
+
+.toc-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.toc-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.toc-item:hover {
+  background: var(--accent-soft);
+}
+
+.toc-item.active {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+}
+
+.toc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-percent {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.toc-footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.toc-pattern-input {
+  flex: 1;
+  min-width: 150px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: var(--ui-font);
+}
+
+.toc-pattern-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.toc-error {
+  width: 100%;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 /* ========== Toast ========== */
