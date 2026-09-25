@@ -263,7 +263,16 @@ button {
 .page-content,
 .page-probe {
   position: absolute;
-  padding: 20px 26px;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-width: 840px;
+  margin: 0 auto;
+  /*
+   * 上下 padding 预留出悬浮工具栏的高度：工具栏显隐不改变正文区尺寸，
+   * 分页测量保持稳定，正文也不会沉到工具栏下面。
+   */
+  padding: 64px 26px 104px;
   font-size: var(--content-font-size);
   line-height: var(--content-line-height);
   font-family: var(--content-font-family);
@@ -274,16 +283,13 @@ button {
 
 /* 正文渲染层：固定一页高度，超出裁剪 */
 .page-content {
-  inset: 0;
+  bottom: 0;
   overflow: hidden;
   color: var(--text);
 }
 
 /* 离屏测量探针：不设 bottom 约束，高度随内容自然生长；视觉隐藏但参与布局 */
 .page-probe {
-  top: 0;
-  left: 0;
-  right: 0;
   visibility: hidden;
   z-index: -1;
   pointer-events: none;

@@ -125,9 +125,10 @@ export class PageMap {
   }
 
   /**
-   * 跳转到包含 charIndex 的页（进度条拖动、续读共用）。
-   * 从 charIndex 前一个估算容量处开始向前实测推进，落点页必然包含目标字符；
-   * 落点之后的页界在后续翻页时按需重算（技术方案 §3.3 的 MVP 简化）。
+   * 跳转到以 charIndex 为起点的页（进度条拖动、续读共用）。
+   * 直接以目标字符为新页的起点并按新链重排——页界本就局部可推导，
+   * 这样落点即所拖位置，续读零回退，且反复开关书不会产生位置漂移
+   * （技术方案 §3.3 的"MVP 简化：跳转后丢弃其后的缓存页，从新页界继续"）。
    */
   jumpTo(charIndex: number): Page {
     const total = this.totalChars;
@@ -138,16 +139,8 @@ export class PageMap {
     }
     const t = Math.min(Math.max(charIndex, 0), total - 1);
     if (t >= this.curStart && t < this.curEnd) return this.current;
-
-    const cap = Math.max(1, Math.floor(this.measurer.estimateCapacity()));
-    let s = Math.max(0, t - cap + 1);
-    let e = this.fitFrom(s);
-    while (e <= t) {
-      s = e;
-      e = this.fitFrom(s);
-    }
-    this.curStart = s;
-    this.curEnd = e;
+    this.curStart = t;
+    this.curEnd = this.fitFrom(t);
     return this.current;
   }
 

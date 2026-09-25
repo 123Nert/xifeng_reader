@@ -142,6 +142,16 @@ describe('PageMap: 跳转', () => {
     expect(pm.current.end).toBe(NOVEL.length)
   })
 
+  it('jumpTo 以目标字符为页起点，且对自身起点幂等（反复开关书无位置漂移）', () => {
+    const pm = new PageMap(NOVEL, makeFakeMeasurer(NOVEL, { charsPerLine: 20, linesPerPage: 6 }))
+    pm.jumpTo(Math.floor(NOVEL.length * 0.6))
+    const landed = { ...pm.current }
+    expect(landed.start).toBe(Math.floor(NOVEL.length * 0.6))
+    // 模拟"保存进度后重开"：对当前页起点再跳一次，位置必须原地不动
+    pm.jumpTo(pm.current.start)
+    expect(pm.current).toEqual(landed)
+  })
+
   it('jumpTo 越界收敛到两端', () => {
     const pm = new PageMap(NOVEL, makeFakeMeasurer(NOVEL, { charsPerLine: 20, linesPerPage: 6 }))
     pm.jumpTo(-100)
