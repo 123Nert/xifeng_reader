@@ -2,11 +2,22 @@
  * ReaderMenu.tsx — 阅读菜单（V1.2）：目录 / 书签 / 搜索 / 设置 四页签。
  * 底部弹层形态；全部数据与操作由 ReaderPage 注入，本组件只负责呈现。
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Toc } from '../core/toc'
 import type { BookmarkRecord } from '../core/bookRepository'
 import type { SearchHit } from '../core/search'
-import { THEME_LABELS, THEME_NAMES, type ReaderSettings, type ThemeName } from '../core/settings'
+import {
+  FONT_FAMILY_LABELS,
+  FONT_FAMILY_NAMES,
+  MARGIN_LABELS,
+  PARA_SPACING_LABELS,
+  PARA_SPACING_STEPS,
+  THEME_LABELS,
+  THEME_NAMES,
+  type FontFamilyName,
+  type ReaderSettings,
+  type ThemeName,
+} from '../core/settings'
 
 export type MenuTab = 'toc' | 'marks' | 'search' | 'settings'
 
@@ -34,6 +45,12 @@ interface Props {
   onFontDelta: (delta: -1 | 1) => void
   onLineHeight: () => void
   onTheme: (theme: ThemeName) => void
+  onParaSpacing: () => void
+  onMargin: () => void
+  onIndentToggle: () => void
+  onAlignToggle: () => void
+  onFontFamily: (name: FontFamilyName) => void
+  onCustomFontFile: (file: File) => void
 }
 
 const TABS: Array<{ key: MenuTab; label: string }> = [
@@ -213,46 +230,124 @@ export default function ReaderMenu(props: Props) {
             </div>
           )}
 
-          {tab === 'settings' && (
-            <div className="settings-pane">
-              <div className="set-row">
-                <span className="set-label">字号</span>
-                <div className="set-value">
-                  <button className="btn chip" onClick={() => props.onFontDelta(-1)}>
-                    A−
-                  </button>
-                  <span className="set-current">{props.settings.fontSize}px</span>
-                  <button className="btn chip" onClick={() => props.onFontDelta(1)}>
-                    A＋
-                  </button>
-                </div>
-              </div>
-              <div className="set-row">
-                <span className="set-label">行距</span>
-                <div className="set-value">
-                  <button className="btn chip" onClick={props.onLineHeight}>
-                    {props.settings.lineHeight}（点击切换）
-                  </button>
-                </div>
-              </div>
-              <div className="set-row">
-                <span className="set-label">主题</span>
-                <div className="set-value">
-                  {THEME_NAMES.map((t) => (
-                    <button
-                      key={t}
-                      className={`btn chip${props.settings.theme === t ? ' active' : ''}`}
-                      onClick={() => props.onTheme(t)}
-                    >
-                      {THEME_LABELS[t]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
+          {tab === 'settings' && <SettingsPane {...props} />}
         </div>
       </aside>
+    </div>
+  )
+}
+
+/** 设置页签（V1.2 基础项 + V1.3 排版与字体）。 */
+function SettingsPane(props: Props) {
+  const { settings } = props
+  const fileRef = useRef<HTMLInputElement>(null)
+  const spIdx = PARA_SPACING_STEPS.indexOf(settings.paraSpacing as (typeof PARA_SPACING_STEPS)[number])
+
+  return (
+    <div className="settings-pane">
+      <div className="set-row">
+        <span className="set-label">字号</span>
+        <div className="set-value">
+          <button className="btn chip" onClick={() => props.onFontDelta(-1)}>
+            A−
+          </button>
+          <span className="set-current">{settings.fontSize}px</span>
+          <button className="btn chip" onClick={() => props.onFontDelta(1)}>
+            A＋
+          </button>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">行距</span>
+        <div className="set-value">
+          <button className="btn chip" onClick={props.onLineHeight}>
+            {settings.lineHeight}（点击切换）
+          </button>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">段距</span>
+        <div className="set-value">
+          <button className="btn chip" onClick={props.onParaSpacing}>
+            {PARA_SPACING_LABELS[spIdx] ?? '适中'}（点击切换）
+          </button>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">边距</span>
+        <div className="set-value">
+          <button className="btn chip" onClick={props.onMargin}>
+            {MARGIN_LABELS[settings.pageMargin]}（点击切换）
+          </button>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">缩进</span>
+        <div className="set-value">
+          <button className={`btn chip${settings.indent ? ' active' : ''}`} onClick={props.onIndentToggle}>
+            段首缩进两字 {settings.indent ? '开' : '关'}
+          </button>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">对齐</span>
+        <div className="set-value">
+          <button
+            className={`btn chip${settings.align === 'justify' ? ' active' : ''}`}
+            onClick={props.onAlignToggle}
+          >
+            {settings.align === 'justify' ? '两端对齐' : '默认对齐'}
+          </button>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">主题</span>
+        <div className="set-value">
+          {THEME_NAMES.map((t) => (
+            <button
+              key={t}
+              className={`btn chip${settings.theme === t ? ' active' : ''}`}
+              onClick={() => props.onTheme(t)}
+            >
+              {THEME_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">字体</span>
+        <div className="set-value">
+          {FONT_FAMILY_NAMES.map((name) => (
+            <button
+              key={name}
+              className={`btn chip${settings.fontFamily === name ? ' active' : ''}`}
+              onClick={() => props.onFontFamily(name)}
+            >
+              {FONT_FAMILY_LABELS[name]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">自定义字体</span>
+        <div className="set-value">
+          <button className="btn chip" onClick={() => fileRef.current?.click()}>
+            选择字体文件…
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".ttf,.otf,.woff,.woff2,font/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) props.onCustomFontFile(f)
+              e.target.value = ''
+            }}
+          />
+          <span className="set-hint">支持 TTF/OTF/WOFF，仅本次会话有效</span>
+        </div>
+      </div>
     </div>
   )
 }

@@ -4,7 +4,18 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { decodeText } from '../core/encoding'
+import { purifyText } from '../core/purify'
 import { addBook, deleteBook, listLibrary, type LibraryEntry } from '../core/bookRepository'
+
+/** 导入编码选项（V1.3：自动探测之外的兜底手段）。 */
+const CHARSET_OPTIONS = [
+  { value: 'auto', label: '自动识别编码' },
+  { value: 'utf-8', label: 'UTF-8' },
+  { value: 'gb18030', label: 'GB18030 / GBK' },
+  { value: 'big5', label: 'Big5 繁体' },
+  { value: 'utf-16le', label: 'UTF-16LE' },
+  { value: 'utf-16be', label: 'UTF-16BE' },
+]
 
 /** 封面配色：按 id 稳定选取，让同一本书每次渲染颜色一致。 */
 const COVER_PALETTE = [
@@ -46,6 +57,8 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
   const [importing, setImporting] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [charsetChoice, setCharsetChoice] = useState('auto')
+  const [purifyOn, setPurifyOn] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<number | undefined>(undefined)
 
@@ -72,18 +85,28 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
       setImporting(true)
       try {
         const buffer = await file.arrayBuffer()
-        const { text, charset } = decodeText(buffer)
+        const { text: decoded, charset } = decodeText(buffer, { charset: charsetChoice })
+        // 导入时净化推广行（V1.3）：原始文件仍在用户手中，可关掉开关重新导入
+        let content = decoded
+        let removed = 0
+        if (purifyOn) {
+          const report = purifyText(decoded)
+          content = report.text
+          removed = report.removed
+        }
         const title = file.name.replace(/\.txt$/i, '')
         await addBook({
           id: crypto.randomUUID(),
           title,
-          content: text,
+          content,
           size: file.size,
           charset,
           importedAt: Date.now(),
         })
         await refresh()
-        showToast(`已导入《${title}》· ${charset.toUpperCase()} 编码自动识别`)
+        showToast(
+          `已导入《${title}》· ${charset.toUpperCase()}${removed > 0 ? ` · 净化 ${removed} 行` : ''}`,
+        )
       } catch (err) {
         console.error(err)
         showToast('导入失败，请重试')
@@ -91,7 +114,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
         setImporting(false)
       }
     },
-    [refresh, showToast],
+    [refresh, showToast, charsetChoice, purifyOn],
   )
 
   const removeBook = useCallback(
@@ -127,13 +150,35 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
           <h1>xifeng 阅读</h1>
           <p className="sub">本地 TXT 阅读器 · 导入即读，下次接着读</p>
         </div>
-        <button
-          className="btn primary"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={importing}
-        >
-          {importing ? '导入中…' : '＋ 导入 TXT'}
-        </button>
+        <div className="import-options">
+          <label className="import-check">
+            <input
+              type="checkbox"
+              checked={purifyOn}
+              onChange={(e) => setPurifyOn(e.target.checked)}
+            />
+            净化广告
+          </label>
+          <select
+            className="import-select"
+            value={charsetChoice}
+            onChange={(e) => setCharsetChoice(e.target.value)}
+            title="导入时使用的文本编码"
+          >
+            {CHARSET_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn primary"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? '导入中…' : '＋ 导入 TXT'}
+          </button>
+        </div>
         <input
           ref={fileInputRef}
           type="file"

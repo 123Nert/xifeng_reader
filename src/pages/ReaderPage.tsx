@@ -22,12 +22,35 @@ import {
   clampFontSize,
   loadSettings,
   nextLineHeight,
+  nextMargin,
+  nextParaSpacing,
   saveSettings,
   FONT_STEP,
   type ReaderSettings,
   type ThemeName,
 } from '../core/settings'
 import ReaderMenu, { type MenuTab } from './ReaderMenu'
+
+/**
+ * 按行切段：与正文渲染共用同一规则（V1.3 排版基础）。
+ * 每个非空行渲染为一个段落块，段距/缩进/对齐由 CSS 变量控制；
+ * 空行不渲染（视觉间隔由段距承担），探针与正文结构一致保证"所见即所测"。
+ */
+function splitParas(slice: string): string[] {
+  return slice.split(/\r\n|\r|\n/).filter((line) => line.length > 0)
+}
+
+/** DOM 版切段（供测量探针使用）。 */
+function buildParagraphs(slice: string): DocumentFragment {
+  const frag = document.createDocumentFragment()
+  for (const line of splitParas(slice)) {
+    const div = document.createElement('div')
+    div.className = 'page-para'
+    div.textContent = line
+    frag.appendChild(div)
+  }
+  return frag
+}
 
 /**
  * DOM 版 Measurer：离屏探针与正文同宽、同一组 CSS 变量排版，"所见即所测"。
@@ -65,7 +88,7 @@ function createDomMeasurer(
     fits(start: number, n: number): boolean {
       // 页尾换行不占当前页高度（渲染时是裁剪区内的空行），页界可以免费含住它们
       const slice = text.slice(start, start + n).replace(/[\r\n]+$/, '')
-      probe.textContent = slice
+      probe.replaceChildren(buildParagraphs(slice))
       return probe.offsetHeight <= pageHeight
     },
   }
@@ -214,6 +237,32 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     [settings],
   )
 
+  /** 排版类设置统一走 commitSettings（写回 CSS 变量并锚定重排，阅读位置不丢）。 */
+  const updateTypography = useCallback(
+    (patch: Partial<ReaderSettings>) => {
+      commitSettings({ ...settings, ...patch })
+    },
+    [settings, commitSettings],
+  )
+
+  /** 加载用户选择的本地字体文件（V1.3；字体数据仅本次会话有效）。 */
+  const handleCustomFont = useCallback(
+    async (file: File) => {
+      try {
+        const buffer = await file.arrayBuffer()
+        const family = 'xifeng-custom-' + Date.now().toString(36)
+        const face = new FontFace(family, buffer)
+        await face.load()
+        document.fonts.add(face)
+        commitSettings({ ...settings, fontFamily: 'custom', customFontName: family })
+        showToast('自定义字体已加载（本次会话有效）')
+      } catch {
+        showToast('字体加载失败，请换一个字体文件')
+      }
+    },
+    [settings, commitSettings, showToast],
+  )
+
   /** 目录 / 书签 / 搜索统一跳转：与进度条共用 PageMap.jumpTo，同一字符偏移坐标系。 */
   const jumpToOffset = useCallback(
     (charIndex: number) => {
@@ -315,27 +364,38 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const chapterIdx = toc.entries.length > 0 ? currentChapterIndex(toc.entries, page.start) : -1
   const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
 
-  /** 正文渲染：搜索关键词命中处在当前页内高亮。 */
+  /** 正文渲染：逐段渲染（V1.3 排版），搜索关键词命中处在当前页内高亮。 */
   const renderContent = (): ReactNode => {
     if (!pageText) return ready && totalChars === 0 ? '（这本书没有正文内容）' : ''
     const q = hlQuery?.trim().toLowerCase()
-    if (!q) return pageText
-    const lower = pageText.toLowerCase()
-    if (!lower.includes(q)) return pageText
-    const parts: ReactNode[] = []
-    let i = 0
-    let k = 0
-    for (;;) {
-      const idx = lower.indexOf(q, i)
-      if (idx < 0) {
-        parts.push(pageText.slice(i))
-        break
+    const paras = splitParas(pageText)
+    return paras.map((line, i) => {
+      let content: ReactNode = line
+      if (q) {
+        const lower = line.toLowerCase()
+        if (lower.includes(q)) {
+          const parts: ReactNode[] = []
+          let from = 0
+          let k = 0
+          for (;;) {
+            const idx = lower.indexOf(q, from)
+            if (idx < 0) {
+              parts.push(line.slice(from))
+              break
+            }
+            parts.push(line.slice(from, idx))
+            parts.push(<mark key={k++}>{line.slice(idx, idx + q.length)}</mark>)
+            from = idx + q.length
+          }
+          content = parts
+        }
       }
-      parts.push(pageText.slice(i, idx))
-      parts.push(<mark key={k++}>{pageText.slice(idx, idx + q.length)}</mark>)
-      i = idx + q.length
-    }
-    return parts
+      return (
+        <div className="page-para" key={i}>
+          {content}
+        </div>
+      )
+    })
   }
 
   return (
@@ -418,6 +478,14 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         onFontDelta={changeFont}
         onLineHeight={cycleLineHeight}
         onTheme={setThemeNamed}
+        onParaSpacing={() => updateTypography({ paraSpacing: nextParaSpacing(settings.paraSpacing) })}
+        onMargin={() => updateTypography({ pageMargin: nextMargin(settings.pageMargin) })}
+        onIndentToggle={() => updateTypography({ indent: !settings.indent })}
+        onAlignToggle={() =>
+          updateTypography({ align: settings.align === 'justify' ? 'start' : 'justify' })
+        }
+        onFontFamily={(name) => updateTypography({ fontFamily: name })}
+        onCustomFontFile={(file) => void handleCustomFont(file)}
       />
 
       {toast && <div className="toast">{toast}</div>}

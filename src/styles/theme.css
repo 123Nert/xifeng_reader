@@ -303,14 +303,23 @@ button {
   /*
    * 上下 padding 预留出悬浮工具栏的高度：工具栏显隐不改变正文区尺寸，
    * 分页测量保持稳定，正文也不会沉到工具栏下面。
+   * 水平边距/对齐/缩进走 CSS 变量（V1.3 排版设置）。
    */
-  padding: 64px 26px 104px;
+  padding: 64px var(--content-padding-x, 26px) 104px;
   font-size: var(--content-font-size);
   line-height: var(--content-line-height);
   font-family: var(--content-font-family);
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
+  text-align: var(--content-align, start);
+  text-indent: var(--content-indent, 0em);
+}
+
+/* 段落块（V1.3）：段距由设置写回的 CSS 变量控制 */
+.page-para {
+  margin: 0 0 var(--content-para-spacing, 0.5em);
+  min-height: var(--content-line-height);
 }
 
 /* 正文渲染层：固定一页高度，超出裁剪 */
@@ -773,6 +782,39 @@ button {
   min-width: 44px;
   text-align: center;
   font-size: 14px;
+}
+
+.set-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 书库导入选项（V1.3） */
+.import-options {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.import-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.import-select {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
 }
 
 .btn.chip.active {
