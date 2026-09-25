@@ -20,6 +20,8 @@ export interface BookRecord {
   /** 导入时探测到的编码 */
   charset: string
   importedAt: number
+  /** V1.1：用户自定义章节正则（可选，空值走内置模式） */
+  tocPattern?: string
 }
 
 export interface ProgressRecord {
@@ -128,6 +130,17 @@ export async function deleteBook(id: string): Promise<void> {
 export async function saveProgress(bookId: string, charIndex: number): Promise<void> {
   const db = await getDB()
   await db.put('progress', { bookId, charIndex, updatedAt: Date.now() })
+}
+
+/** 更新书籍的自定义章节正则；空串表示清除，恢复内置模式。 */
+export async function updateBookTocPattern(id: string, pattern: string): Promise<void> {
+  const db = await getDB()
+  const book = await db.get('books', id)
+  if (!book) return
+  const trimmed = pattern.trim()
+  if (trimmed) book.tocPattern = trimmed
+  else delete book.tocPattern
+  await db.put('books', book)
 }
 
 /** 返回已保存的阅读位置（字符偏移）；没有记录时返回 null。 */

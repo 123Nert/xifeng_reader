@@ -6,12 +6,15 @@ import {
   clampFontSize,
   loadSettings,
   nextLineHeight,
+  nextTheme,
   saveSettings,
   LINE_HEIGHT_DEFAULT,
   LINE_HEIGHT_STEPS,
   FONT_SIZE_DEFAULT,
   FONT_MAX,
   FONT_MIN,
+  THEME_DEFAULT,
+  THEME_NAMES,
   type ReaderSettings,
 } from './settings'
 
@@ -28,11 +31,12 @@ describe('settings: 读写', () => {
     expect(loadSettings(makeStorage())).toEqual({
       fontSize: FONT_SIZE_DEFAULT,
       lineHeight: LINE_HEIGHT_DEFAULT,
+      theme: THEME_DEFAULT,
     })
   })
 
   it('保存后读取往返一致', () => {
-    const s: ReaderSettings = { fontSize: 22, lineHeight: 2 }
+    const s: ReaderSettings = { fontSize: 22, lineHeight: 2, theme: 'dark' }
     const storage = makeStorage()
     saveSettings(s, storage)
     expect(loadSettings(storage)).toEqual(s)
@@ -45,17 +49,22 @@ describe('settings: 容错', () => {
     expect(loadSettings(storage)).toEqual({
       fontSize: FONT_SIZE_DEFAULT,
       lineHeight: LINE_HEIGHT_DEFAULT,
+      theme: THEME_DEFAULT,
     })
   })
 
   it('越界与非法字段被钳制', () => {
-    expect(loadSettings(makeStorage({ 'xifeng.settings': '{"fontSize":99,"lineHeight":9}'}))).toEqual({
+    expect(
+      loadSettings(makeStorage({ 'xifeng.settings': '{"fontSize":99,"lineHeight":9,"theme":"pink"}' })),
+    ).toEqual({
       fontSize: FONT_MAX,
       lineHeight: LINE_HEIGHT_DEFAULT,
+      theme: THEME_DEFAULT,
     })
-    expect(loadSettings(makeStorage({ 'xifeng.settings': '{"fontSize":"abc"}'}))).toEqual({
+    expect(loadSettings(makeStorage({ 'xifeng.settings': '{"fontSize":"abc"}' }))).toEqual({
       fontSize: FONT_SIZE_DEFAULT,
       lineHeight: LINE_HEIGHT_DEFAULT,
+      theme: THEME_DEFAULT,
     })
   })
 })
@@ -76,5 +85,16 @@ describe('settings: 取值域', () => {
     }
     expect(lh).toBe(LINE_HEIGHT_DEFAULT)
     expect(seen.size).toBe(LINE_HEIGHT_STEPS.length)
+  })
+
+  it('nextTheme 循环遍历所有主题', () => {
+    let theme = THEME_DEFAULT
+    const seen = new Set<string>([theme])
+    for (let i = 0; i < THEME_NAMES.length; i++) {
+      theme = nextTheme(theme)
+      seen.add(theme)
+    }
+    expect(theme).toBe(THEME_DEFAULT)
+    expect(seen.size).toBe(THEME_NAMES.length)
   })
 })
