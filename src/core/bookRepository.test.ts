@@ -98,3 +98,33 @@ describe('bookRepository: 进度', () => {
     expect(list[0].id).toBe('read')
   })
 })
+
+describe('bookRepository: 书签（V1.2）', () => {
+  it('添加书签后按位置升序列出，且只含本书的书签', async () => {
+    await repo.addBook(book('b1', '正文一'))
+    await repo.addBook(book('b2', '正文二'))
+
+    await repo.addBookmark('b1', 200, '第二页摘录')
+    await repo.addBookmark('b1', 50, '第一页摘录')
+    await repo.addBookmark('b2', 10, '另一本书')
+
+    const list = await repo.listBookmarks('b1')
+    expect(list.map((x) => x.charIndex)).toEqual([50, 200])
+    expect(list[0].excerpt).toBe('第一页摘录')
+    expect(list.every((x) => x.bookId === 'b1')).toBe(true)
+  })
+
+  it('删除书签后列表不再包含', async () => {
+    await repo.addBook(book('b3', '正文'))
+    const added = await repo.addBookmark('b3', 7, '摘录')
+    await repo.deleteBookmark(added.id)
+    expect(await repo.listBookmarks('b3')).toHaveLength(0)
+  })
+
+  it('重复位置的书签允许并存（书签不去重）', async () => {
+    await repo.addBook(book('b4', '正文'))
+    await repo.addBookmark('b4', 7, '甲')
+    await repo.addBookmark('b4', 7, '乙')
+    expect(await repo.listBookmarks('b4')).toHaveLength(2)
+  })
+})

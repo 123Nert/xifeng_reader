@@ -14,6 +14,7 @@
   --accent-soft: #e3efe8;
   --danger: #b5563e;
   --shadow: 0 10px 30px rgba(60, 55, 40, 0.1);
+  --mark-bg: #f2dd8a;
 
   /* 正文排版变量：由 JS 动态写回（字号/行距设置），分页测量与渲染共用 */
   --content-font-size: 18px;
@@ -33,6 +34,7 @@
   --border: #e2d5b8;
   --accent: #8a6a3f;
   --accent-soft: #ecdfc0;
+  --mark-bg: #e8cf7a;
   --shadow: 0 10px 30px rgba(90, 70, 40, 0.12);
 }
 
@@ -46,6 +48,7 @@
   --border: #30333a;
   --accent: #4f9d7c;
   --accent-soft: #24342b;
+  --mark-bg: #55551f;
   --danger: #c26a52;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
@@ -460,9 +463,9 @@ button {
   gap: 8px;
 }
 
-/* ========== 目录抽屉（V1.1） ========== */
+/* ========== 阅读菜单（V1.2）：目录 / 书签 / 搜索 / 设置 ========== */
 
-.toc-mask {
+.menu-mask {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.35);
@@ -479,48 +482,78 @@ button {
   }
 }
 
-.toc-drawer {
+.menu-sheet {
   position: fixed;
-  top: 0;
-  right: 0;
+  left: 50%;
   bottom: 0;
-  width: min(340px, 88vw);
+  transform: translateX(-50%);
+  width: min(720px, 100vw);
+  height: min(72vh, 560px);
   background: var(--panel);
   color: var(--text);
   display: flex;
   flex-direction: column;
-  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.2);
-  animation: slide-in 0.22s ease;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.2);
+  animation: sheet-up 0.22s ease;
 }
 
-@keyframes slide-in {
+@keyframes sheet-up {
   from {
-    transform: translateX(100%);
+    transform: translateX(-50%) translateY(100%);
   }
   to {
-    transform: none;
+    transform: translateX(-50%) translateY(0);
   }
 }
 
-.toc-header {
+.menu-tabs {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  font-weight: 600;
-  font-size: 15px;
 }
 
-.toc-count {
+.menu-tab {
+  flex: 1;
+  padding: 13px 8px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  flex: 1;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
 }
 
-.toc-list {
+.menu-tab.active {
+  color: var(--accent);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.menu-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.menu-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.menu-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* 目录列表（菜单内） */
+.menu-body .toc-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 6px 0;
 }
@@ -593,6 +626,168 @@ button {
   width: 100%;
   color: var(--danger);
   font-size: 12px;
+}
+
+/* 书签列表 */
+.bm-list {
+  padding: 10px 12px 16px;
+}
+
+.bm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.bm-item {
+  position: relative;
+  padding: 10px 40px 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--panel);
+}
+
+.bm-item:hover {
+  background: var(--accent-soft);
+}
+
+.bm-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.bm-excerpt {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bm-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bm-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bm-delete:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* 搜索 */
+.search-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.search-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-input {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 14px;
+  font-family: var(--ui-font);
+}
+
+.search-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.search-count {
+  padding: 8px 14px 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.search-hit .toc-name {
+  white-space: normal;
+}
+
+/* 设置面板 */
+.settings-pane {
+  padding: 18px 20px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.set-row:last-child {
+  border-bottom: none;
+}
+
+.set-label {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.set-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.set-current {
+  min-width: 44px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.btn.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* 搜索命中高亮 */
+.page-content mark,
+.menu-body mark {
+  background: var(--mark-bg);
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
 }
 
 /* ========== Toast ========== */

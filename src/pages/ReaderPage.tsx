@@ -3,21 +3,31 @@
  * 只渲染当前页切片；翻页 / 跳转 / 锚定重排全部委托 core 层 PageMap。
  * 顶栏与底栏为悬浮层：显隐不改变正文区尺寸，避免无谓重排。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { PageMap, type Measurer } from '../core/pagination'
-import { buildToc, currentChapterIndex, type Toc, type TocEntry } from '../core/toc'
-import { getBook, getProgress, saveProgress, updateBookTocPattern } from '../core/bookRepository'
+import { buildToc, currentChapterIndex, type Toc } from '../core/toc'
+import { searchText } from '../core/search'
+import {
+  addBookmark,
+  deleteBookmark,
+  getBook,
+  getProgress,
+  listBookmarks,
+  saveProgress,
+  updateBookTocPattern,
+  type BookmarkRecord,
+} from '../core/bookRepository'
 import {
   applySettingsToDocument,
   clampFontSize,
   loadSettings,
   nextLineHeight,
-  nextTheme,
   saveSettings,
   FONT_STEP,
-  THEME_LABELS,
   type ReaderSettings,
+  type ThemeName,
 } from '../core/settings'
+import ReaderMenu, { type MenuTab } from './ReaderMenu'
 
 /**
  * DOM 版 Measurer：离屏探针与正文同宽、同一组 CSS 变量排版，"所见即所测"。
@@ -70,8 +80,11 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [ready, setReady] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [toc, setToc] = useState<Toc>({ entries: [], source: 'none' })
-  const [tocOpen, setTocOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuTab, setMenuTab] = useState<MenuTab>('toc')
   const [patternDraft, setPatternDraft] = useState('')
+  const [bookmarks, setBookmarks] = useState<BookmarkRecord[]>([])
+  const [hlQuery, setHlQuery] = useState<string | null>(null)
 
   const textRef = useRef('')
   const pagemapRef = useRef<PageMap | null>(null)
@@ -79,8 +92,6 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const viewportRef = useRef<HTMLDivElement>(null)
   const probeRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<number | undefined>(undefined)
-  const pendingFraction = useRef<number | null>(null)
-  const rafPending = useRef(false)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -117,6 +128,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setPage({ ...pm.current })
       setToc(buildToc(book.content, book.tocPattern))
       setPatternDraft(book.tocPattern ?? '')
+      setBookmarks(await listBookmarks(bookId))
       setReady(true)
       // 打开即记一次"最后阅读时间"
       void saveProgress(bookId, pm.current.start)
@@ -154,18 +166,13 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     [bookId],
   )
 
-  /** 进度条拖动：input 事件高频触发，用 rAF 合并到每帧最多一次跳转。 */
+  /**
+   * 进度条拖动：input 事件里直接跳转。单次跳转只是一次实测二分（毫秒级），
+   * 无需 rAF 节流——后台页面里 rAF/定时器都会被浏览器暂停或钳制，直接执行反而最可靠。
+   */
   const onSliderInput = useCallback(
     (fraction: number) => {
-      pendingFraction.current = fraction
-      if (rafPending.current) return
-      rafPending.current = true
-      requestAnimationFrame(() => {
-        rafPending.current = false
-        const f = pendingFraction.current
-        pendingFraction.current = null
-        if (f != null) jumpToFraction(f)
-      })
+      jumpToFraction(fraction)
     },
     [jumpToFraction],
   )
@@ -197,26 +204,60 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   }, [settings, commitSettings, showToast])
 
   /** 主题只切换颜色不改版式，无需分页重排。 */
-  const cycleTheme = useCallback(() => {
-    const next = { ...settings, theme: nextTheme(settings.theme) }
-    setSettings(next)
-    saveSettings(next)
-    applySettingsToDocument(next)
-    showToast(`主题 ${THEME_LABELS[next.theme]}`)
-  }, [settings, showToast])
+  const setThemeNamed = useCallback(
+    (theme: ThemeName) => {
+      const next = { ...settings, theme }
+      setSettings(next)
+      saveSettings(next)
+      applySettingsToDocument(next)
+    },
+    [settings],
+  )
 
-  /** 目录跳转：与进度条共用 PageMap.jumpTo，同一字符偏移坐标系。 */
-  const jumpToChapter = useCallback(
-    (entry: TocEntry) => {
+  /** 目录 / 书签 / 搜索统一跳转：与进度条共用 PageMap.jumpTo，同一字符偏移坐标系。 */
+  const jumpToOffset = useCallback(
+    (charIndex: number) => {
       const pm = pagemapRef.current
       if (!pm) return
-      pm.jumpTo(entry.charIndex)
+      pm.jumpTo(charIndex)
       setPage({ ...pm.current })
       void saveProgress(bookId, pm.current.start)
-      setTocOpen(false)
+      setMenuOpen(false)
     },
     [bookId],
   )
+
+  const openMenu = useCallback((tab: MenuTab) => {
+    setMenuTab(tab)
+    setMenuOpen(true)
+  }, [])
+
+  const handleAddBookmark = useCallback(async () => {
+    const pm = pagemapRef.current
+    if (!pm) return
+    const excerpt = textRef.current
+      .slice(pm.current.start, pm.current.start + 48)
+      .replace(/\s+/g, ' ')
+      .trim()
+    await addBookmark(bookId, pm.current.start, excerpt)
+    setBookmarks(await listBookmarks(bookId))
+    showToast('已添加书签')
+  }, [bookId, showToast])
+
+  const handleDeleteBookmark = useCallback(
+    async (id: string) => {
+      await deleteBookmark(id)
+      setBookmarks(await listBookmarks(bookId))
+      showToast('已删除书签')
+    },
+    [bookId, showToast],
+  )
+
+  /** 全文搜索：结果交给菜单展示，同时记住关键词用于正文页内高亮。 */
+  const handleSearch = useCallback((query: string) => {
+    setHlQuery(query.trim() || null)
+    return searchText(textRef.current, query)
+  }, [])
 
   /** 应用自定义章节正则（保存到书籍记录，空串恢复内置模式）。 */
   const applyPattern = useCallback(async () => {
@@ -242,12 +283,13 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         e.preventDefault()
         turn(-1)
       } else if (e.key === 'Escape') {
-        onBack()
+        if (menuOpen) setMenuOpen(false)
+        else onBack()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [turn, onBack])
+  }, [turn, onBack, menuOpen])
 
   // ---- 窗口尺寸变化：去抖后刷新度量并锚定重排 ----
   useEffect(() => {
@@ -273,11 +315,28 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const chapterIdx = toc.entries.length > 0 ? currentChapterIndex(toc.entries, page.start) : -1
   const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
 
-  // 打开目录时把当前章节滚到可见区域中央
-  useEffect(() => {
-    if (!tocOpen) return
-    document.querySelector('.toc-item.active')?.scrollIntoView({ block: 'center' })
-  }, [tocOpen, chapterIdx])
+  /** 正文渲染：搜索关键词命中处在当前页内高亮。 */
+  const renderContent = (): ReactNode => {
+    if (!pageText) return ready && totalChars === 0 ? '（这本书没有正文内容）' : ''
+    const q = hlQuery?.trim().toLowerCase()
+    if (!q) return pageText
+    const lower = pageText.toLowerCase()
+    if (!lower.includes(q)) return pageText
+    const parts: ReactNode[] = []
+    let i = 0
+    let k = 0
+    for (;;) {
+      const idx = lower.indexOf(q, i)
+      if (idx < 0) {
+        parts.push(pageText.slice(i))
+        break
+      }
+      parts.push(pageText.slice(i, idx))
+      parts.push(<mark key={k++}>{pageText.slice(idx, idx + q.length)}</mark>)
+      i = idx + q.length
+    }
+    return parts
+  }
 
   return (
     <section className={`reader${chromeVisible ? '' : ' chrome-hidden'}`}>
@@ -289,19 +348,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
           <span className="reader-book">{title}</span>
           {chapterTitle && <span className="reader-chapter">{chapterTitle}</span>}
         </div>
-        <div className="top-actions">
-          {toc.entries.length > 0 && (
-            <button className="btn ghost" onClick={() => setTocOpen(true)}>
-              目录
-            </button>
-          )}
-        </div>
         <div className="top-spacer" />
       </header>
 
       <main ref={viewportRef} className="page-viewport">
         <div className="page-content" aria-live="polite">
-          {pageText || (ready && totalChars === 0 ? '（这本书没有正文内容）' : '')}
+          {renderContent()}
         </div>
         {/* 离屏测量探针：与正文同宽同样式，仅用于分页测量 */}
         <div ref={probeRef} className="page-probe" aria-hidden="true" />
@@ -328,71 +380,45 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         />
         <div className="bottom-row">
           <span className="page-info">{Math.round(percent * 100)}%</span>
-          <div className="font-controls">
-            <button className="btn chip" title="减小字号" onClick={() => changeFont(-1)}>
-              A−
+          <div className="menu-buttons">
+            <button className="btn chip" onClick={() => openMenu('toc')}>
+              目录
             </button>
-            <button className="btn chip" title="增大字号" onClick={() => changeFont(1)}>
-              A＋
+            <button className="btn chip" onClick={() => openMenu('marks')}>
+              书签
             </button>
-            <button className="btn chip" title="切换行距" onClick={cycleLineHeight}>
-              行距 {settings.lineHeight}
+            <button className="btn chip" onClick={() => openMenu('search')}>
+              搜索
             </button>
-            <button className="btn chip" title="切换主题（日间/护眼/夜间）" onClick={cycleTheme}>
-              主题 {THEME_LABELS[settings.theme]}
+            <button className="btn chip" onClick={() => openMenu('settings')}>
+              设置
             </button>
           </div>
         </div>
       </footer>
 
-      {/* 目录抽屉（V1.1） */}
-      {tocOpen && (
-        <div className="toc-mask" onClick={() => setTocOpen(false)}>
-          <aside className="toc-drawer" onClick={(e) => e.stopPropagation()}>
-            <header className="toc-header">
-              <span>目录</span>
-              <span className="toc-count">
-                {toc.source === 'custom' ? '自定义正则 · ' : ''}
-                {toc.entries.length} 章
-              </span>
-              <button className="btn ghost" onClick={() => setTocOpen(false)}>
-                关闭
-              </button>
-            </header>
-            <div className="toc-list">
-              {toc.entries.map((entry, i) => (
-                <button
-                  key={entry.charIndex}
-                  className={`toc-item${i === chapterIdx ? ' active' : ''}`}
-                  onClick={() => jumpToChapter(entry)}
-                >
-                  <span className="toc-name">{entry.title}</span>
-                  <span className="toc-percent">
-                    {totalChars > 1
-                      ? Math.round((entry.charIndex / (totalChars - 1)) * 100) + '%'
-                      : ''}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <footer className="toc-footer">
-              <input
-                className="toc-pattern-input"
-                value={patternDraft}
-                placeholder="自定义章节正则（可选，如 ^\\d+$）"
-                onChange={(e) => setPatternDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void applyPattern()
-                }}
-              />
-              <button className="btn chip" onClick={() => void applyPattern()}>
-                应用
-              </button>
-              {toc.error && <div className="toc-error">{toc.error}</div>}
-            </footer>
-          </aside>
-        </div>
-      )}
+      {/* 阅读菜单（V1.2）：目录 / 书签 / 搜索 / 设置 */}
+      <ReaderMenu
+        open={menuOpen}
+        tab={menuTab}
+        onTabChange={setMenuTab}
+        onClose={() => setMenuOpen(false)}
+        toc={toc}
+        chapterIdx={chapterIdx}
+        totalChars={totalChars}
+        patternDraft={patternDraft}
+        onPatternDraft={setPatternDraft}
+        onApplyPattern={() => void applyPattern()}
+        bookmarks={bookmarks}
+        onAddBookmark={() => void handleAddBookmark()}
+        onDeleteBookmark={(id) => void handleDeleteBookmark(id)}
+        onJumpOffset={jumpToOffset}
+        onSearch={handleSearch}
+        settings={settings}
+        onFontDelta={changeFont}
+        onLineHeight={cycleLineHeight}
+        onTheme={setThemeNamed}
+      />
 
       {toast && <div className="toast">{toast}</div>}
     </section>

@@ -30,6 +30,15 @@ export interface ProgressRecord {
   updatedAt: number
 }
 
+/** V1.2 书签：字符偏移定位 + 摘录便于辨认。 */
+export interface BookmarkRecord {
+  id: string
+  bookId: string
+  charIndex: number
+  excerpt: string
+  createdAt: number
+}
+
 /** 书库列表项：书籍元信息 + 合并后的阅读进度，不含正文。 */
 export interface LibraryEntry {
   id: string
@@ -45,19 +54,30 @@ export interface LibraryEntry {
 interface XifengDB extends DBSchema {
   books: { key: string; value: BookRecord }
   progress: { key: string; value: ProgressRecord }
+  bookmarks: {
+    key: string
+    value: BookmarkRecord
+    indexes: { 'by-book': string }
+  }
 }
 
 const DB_NAME = 'xifeng-reader'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 let dbPromise: Promise<IDBPDatabase<XifengDB>> | null = null
 
 function getDB(): Promise<IDBPDatabase<XifengDB>> {
   if (!dbPromise) {
     dbPromise = openDB<XifengDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        db.createObjectStore('books', { keyPath: 'id' })
-        db.createObjectStore('progress', { keyPath: 'bookId' })
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('books', { keyPath: 'id' })
+          db.createObjectStore('progress', { keyPath: 'bookId' })
+        }
+        if (oldVersion < 2) {
+          const store = db.createObjectStore('bookmarks', { keyPath: 'id' })
+          store.createIndex('by-book', 'bookId')
+        }
       },
     })
   }
@@ -141,6 +161,37 @@ export async function updateBookTocPattern(id: string, pattern: string): Promise
   if (trimmed) book.tocPattern = trimmed
   else delete book.tocPattern
   await db.put('books', book)
+}
+
+// ---------- 书签（V1.2） ----------
+
+export async function addBookmark(
+  bookId: string,
+  charIndex: number,
+  excerpt: string,
+): Promise<BookmarkRecord> {
+  const db = await getDB()
+  const record: BookmarkRecord = {
+    id: crypto.randomUUID(),
+    bookId,
+    charIndex,
+    excerpt,
+    createdAt: Date.now(),
+  }
+  await db.put('bookmarks', record)
+  return record
+}
+
+/** 某本书的全部书签，按阅读位置升序。 */
+export async function listBookmarks(bookId: string): Promise<BookmarkRecord[]> {
+  const db = await getDB()
+  const list = await db.getAllFromIndex('bookmarks', 'by-book', bookId)
+  return list.sort((a, b) => a.charIndex - b.charIndex)
+}
+
+export async function deleteBookmark(id: string): Promise<void> {
+  const db = await getDB()
+  await db.delete('bookmarks', id)
 }
 
 /** 返回已保存的阅读位置（字符偏移）；没有记录时返回 null。 */
