@@ -1,67 +1,12 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>xifeng 阅读 · Demo</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-
-  <!-- ========== 书库视图 ========== -->
-  <section id="libraryView" class="library">
-    <header class="lib-header">
-      <div class="lib-heading">
-        <h1>xifeng 阅读</h1>
-        <p class="sub">本地 TXT 阅读器 · Demo（数据模拟）</p>
-      </div>
-      <button id="btnImport" class="btn primary">＋ 导入 TXT</button>
-      <input id="fileInput" type="file" accept=".txt,text/plain" hidden>
-    </header>
-
-    <main id="bookGrid" class="book-grid"></main>
-
-    <div id="emptyState" class="empty hidden">
-      <div class="empty-icon">📖</div>
-      <p class="empty-title">书架还是空的</p>
-      <p class="sub">点击右上角「导入 TXT」，或把文件拖到这里</p>
-    </div>
-
-    <div id="dropHint" class="drop-hint hidden">松开以导入 TXT 文件</div>
-  </section>
-
-  <!-- ========== 阅读视图 ========== -->
-  <section id="readerView" class="reader hidden">
-    <header id="readerTop" class="reader-top">
-      <button id="btnBack" class="btn ghost">‹ 书库</button>
-      <div id="readerTitle" class="reader-title"></div>
-      <div class="top-spacer"></div>
-    </header>
-
-    <main id="pageViewport" class="page-viewport">
-      <div id="pageContent" class="page-content"></div>
-      <div id="tapPrev" class="tap-zone left" title="上一页（←）"></div>
-      <div id="tapCenter" class="tap-zone center" title="显示 / 隐藏工具栏"></div>
-      <div id="tapNext" class="tap-zone right" title="下一页（→）"></div>
-    </main>
-
-    <footer id="readerBottom" class="reader-bottom">
-      <input id="progressSlider" type="range" min="0" max="1000" value="0" step="1"
-             aria-label="阅读进度，拖动跳转">
-      <div class="bottom-row">
-        <span id="pageInfo" class="page-info"></span>
-        <div class="font-controls">
-          <button id="btnFontMinus" class="btn chip" title="减小字号">A−</button>
-          <button id="btnFontPlus" class="btn chip" title="增大字号">A＋</button>
-          <button id="btnLineSpacing" class="btn chip" title="切换行距">行距 1.75</button>
-        </div>
-      </div>
-    </footer>
-  </section>
-
-  <div id="toast" class="toast hidden"></div>
-
-  <script src="core.js"></script>
-  <script src="app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>xifeng 阅读</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
