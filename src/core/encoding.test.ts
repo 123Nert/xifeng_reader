@@ -95,3 +95,30 @@ describe('decodeText: 兜底', () => {
     expect(r.text).toBe('')
   })
 })
+
+describe('decodeText: 强制编码（V1.3）', () => {
+  it('强制 Big5 正确解码繁体文本（绕过自动探测）', () => {
+    // 『你好，天涯』的 Big5 编码
+    const bytes = Uint8Array.from([0xa7, 0x41, 0xa6, 0x6e, 0xa1, 0x41, 0xa4, 0xd1, 0xb2, 0x50])
+    const r = decodeText(bytes, { charset: 'big5' })
+    expect(r.text).toBe('你好，天涯')
+    expect(r.charset).toBe('big5')
+  })
+
+  it('强制编码与自动探测结果不同（用户手动纠偏的场景）', () => {
+    // GBK 的『你好』若被强制按 UTF-8 解码会得到乱码，但 charset 应如实返回
+    const bytes = Uint8Array.from([0xc4, 0xe3, 0xba, 0xc3])
+    const forced = decodeText(bytes, { charset: 'utf-8' })
+    const auto = decodeText(bytes)
+    expect(forced.charset).toBe('utf-8')
+    expect(forced.text).not.toBe(auto.text)
+    expect(auto.text).toBe('你好')
+  })
+
+  it('无效编码标签回退自动探测', () => {
+    const bytes = utf8('正常文本')
+    const r = decodeText(bytes, { charset: 'not-a-charset' })
+    expect(r.text).toBe('正常文本')
+    expect(r.charset).toBe('utf-8')
+  })
+})

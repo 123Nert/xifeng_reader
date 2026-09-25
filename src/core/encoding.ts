@@ -13,8 +13,23 @@ export interface DecodeResult {
   charset: string
 }
 
-export function decodeText(buffer: ArrayBuffer | Uint8Array): DecodeResult {
+export interface DecodeOptions {
+  /** 强制使用的编码标签（如 'gb18030'、'big5'）；'auto' 或缺省走自动探测。 */
+  charset?: string
+}
+
+export function decodeText(buffer: ArrayBuffer | Uint8Array, options?: DecodeOptions): DecodeResult {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+
+  // 手动指定编码（V1.3 兜底自动探测的少数场景）；解码失败则回退自动探测
+  const forced = options?.charset
+  if (forced && forced !== 'auto') {
+    try {
+      return { text: new TextDecoder(forced).decode(bytes), charset: forced }
+    } catch {
+      // 标签无效或字节非法，继续走自动探测
+    }
+  }
 
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
     return { text: new TextDecoder('utf-8').decode(bytes.subarray(3)), charset: 'utf-8' }

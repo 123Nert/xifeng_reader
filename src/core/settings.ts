@@ -1,13 +1,29 @@
 /**
  * settings.ts — 阅读设置读写（localStorage，全局生效）。
  *
- * localStorage `xifeng.settings` → { fontSize, lineHeight, theme }。
+ * localStorage `xifeng.settings` → {
+ *   fontSize, lineHeight, theme,
+ *   paraSpacing, pageMargin, indent, align,   // V1.3 排版
+ *   fontFamily, customFontName,               // V1.3 字体
+ * }。
  */
 
 export interface ReaderSettings {
   fontSize: number
   lineHeight: number
   theme: ThemeName
+  /** 段间距（em），0 = 紧凑 */
+  paraSpacing: number
+  /** 页边距档位 */
+  pageMargin: MarginName
+  /** 段首缩进两字 */
+  indent: boolean
+  /** 两端对齐 */
+  align: 'start' | 'justify'
+  /** 正文字体预设 */
+  fontFamily: FontFamilyName
+  /** 自定义字体族名（字体文件仅本会话内加载） */
+  customFontName?: string
 }
 
 export const FONT_MIN = 14
@@ -29,6 +45,50 @@ export function nextTheme(current: ThemeName): ThemeName {
   return THEME_NAMES[(i + 1) % THEME_NAMES.length]
 }
 
+// ---------- V1.3 排版 ----------
+
+export const PARA_SPACING_STEPS = [0, 0.5, 1] as const
+export const PARA_SPACING_DEFAULT: number = 0.5
+export const PARA_SPACING_LABELS = ['紧凑', '适中', '宽松']
+
+/** 循环切换段距档位。 */
+export function nextParaSpacing(current: number): number {
+  const i = PARA_SPACING_STEPS.indexOf(current as (typeof PARA_SPACING_STEPS)[number])
+  return PARA_SPACING_STEPS[(i + 1) % PARA_SPACING_STEPS.length]
+}
+
+export const MARGIN_NAMES = ['narrow', 'medium', 'wide'] as const
+export type MarginName = (typeof MARGIN_NAMES)[number]
+export const MARGIN_DEFAULT: MarginName = 'medium'
+export const MARGIN_LABELS: Record<MarginName, string> = { narrow: '窄', medium: '中', wide: '宽' }
+/** 各档位对应的正文区水平内边距（px）。 */
+export const MARGIN_PX: Record<MarginName, number> = { narrow: 14, medium: 26, wide: 42 }
+
+export function nextMargin(current: MarginName): MarginName {
+  const i = MARGIN_NAMES.indexOf(current)
+  return MARGIN_NAMES[(i + 1) % MARGIN_NAMES.length]
+}
+
+// ---------- V1.3 字体 ----------
+
+export const FONT_FAMILY_NAMES = ['serif', 'sans', 'kai', 'custom'] as const
+export type FontFamilyName = (typeof FONT_FAMILY_NAMES)[number]
+export const FONT_FAMILY_DEFAULT: FontFamilyName = 'serif'
+export const FONT_FAMILY_LABELS: Record<FontFamilyName, string> = {
+  serif: '宋体',
+  sans: '黑体',
+  kai: '楷体',
+  custom: '自定义',
+}
+
+/** 各字体预设对应的 font-family 栈；custom 走运行时注册的字体族。 */
+export const FONT_FAMILY_STACKS: Record<FontFamilyName, string> = {
+  serif: "Georgia, 'Nimbus Roman', 'Songti SC', 'Noto Serif CJK SC', 'SimSun', serif",
+  sans: "system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+  kai: "'Kaiti SC', KaiTi, STKaiti, 'Noto Serif CJK SC', serif",
+  custom: "var(--custom-font-family), 'Songti SC', 'Noto Serif CJK SC', serif",
+}
+
 const STORAGE_KEY = 'xifeng.settings'
 
 export function clampFontSize(size: number): number {
@@ -41,29 +101,51 @@ export function nextLineHeight(current: number): number {
   return LINE_HEIGHT_STEPS[(i + 1) % LINE_HEIGHT_STEPS.length]
 }
 
-/** 读取设置；缺失或损坏时返回默认值。storage 参数便于单测注入。 */
+/** 读取设置；缺失或损坏时返回默认值（未知字段逐项回退，兼容旧版本数据）。 */
 export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): ReaderSettings {
+  const fallback: ReaderSettings = {
+    fontSize: FONT_SIZE_DEFAULT,
+    lineHeight: LINE_HEIGHT_DEFAULT,
+    theme: THEME_DEFAULT,
+    paraSpacing: PARA_SPACING_DEFAULT,
+    pageMargin: MARGIN_DEFAULT,
+    indent: false,
+    align: 'start',
+    fontFamily: FONT_FAMILY_DEFAULT,
+  }
   try {
     const raw = storage.getItem(STORAGE_KEY)
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<ReaderSettings>
-      const fontSize = clampFontSize(Number(parsed.fontSize))
-      const lineHeight = Number(parsed.lineHeight)
-      const theme = THEME_NAMES.includes(parsed.theme as ThemeName)
-        ? (parsed.theme as ThemeName)
-        : THEME_DEFAULT
+      const p = JSON.parse(raw) as Partial<ReaderSettings>
+      const fontSize = clampFontSize(Number(p.fontSize))
+      const lineHeight = Number(p.lineHeight)
+      const paraSpacing = Number(p.paraSpacing)
       return {
-        fontSize: Number.isFinite(fontSize) ? fontSize : FONT_SIZE_DEFAULT,
+        fontSize: Number.isFinite(fontSize) ? fontSize : fallback.fontSize,
         lineHeight: LINE_HEIGHT_STEPS.includes(lineHeight as (typeof LINE_HEIGHT_STEPS)[number])
           ? lineHeight
-          : LINE_HEIGHT_DEFAULT,
-        theme,
+          : fallback.lineHeight,
+        theme: THEME_NAMES.includes(p.theme as ThemeName) ? (p.theme as ThemeName) : fallback.theme,
+        paraSpacing: PARA_SPACING_STEPS.includes(
+          paraSpacing as (typeof PARA_SPACING_STEPS)[number],
+        )
+          ? paraSpacing
+          : fallback.paraSpacing,
+        pageMargin: MARGIN_NAMES.includes(p.pageMargin as MarginName)
+          ? (p.pageMargin as MarginName)
+          : fallback.pageMargin,
+        indent: typeof p.indent === 'boolean' ? p.indent : fallback.indent,
+        align: p.align === 'justify' ? 'justify' : fallback.align,
+        fontFamily: FONT_FAMILY_NAMES.includes(p.fontFamily as FontFamilyName)
+          ? (p.fontFamily as FontFamilyName)
+          : fallback.fontFamily,
+        customFontName: typeof p.customFontName === 'string' ? p.customFontName : undefined,
       }
     }
   } catch {
     // 数据损坏时静默回退默认值
   }
-  return { fontSize: FONT_SIZE_DEFAULT, lineHeight: LINE_HEIGHT_DEFAULT, theme: THEME_DEFAULT }
+  return fallback
 }
 
 export function saveSettings(
@@ -80,7 +162,13 @@ export function saveSettings(
 /** 把主题与排版设置写回根元素（CSS 变量 + data-theme）；分页测量与正文渲染共用，保证"所见即所测"。 */
 export function applySettingsToDocument(settings: ReaderSettings): void {
   if (typeof document === 'undefined') return
-  document.documentElement.style.setProperty('--content-font-size', settings.fontSize + 'px')
-  document.documentElement.style.setProperty('--content-line-height', String(settings.lineHeight))
-  document.documentElement.dataset.theme = settings.theme
+  const root = document.documentElement
+  root.style.setProperty('--content-font-size', settings.fontSize + 'px')
+  root.style.setProperty('--content-line-height', String(settings.lineHeight))
+  root.style.setProperty('--content-para-spacing', settings.paraSpacing + 'em')
+  root.style.setProperty('--content-padding-x', MARGIN_PX[settings.pageMargin] + 'px')
+  root.style.setProperty('--content-indent', settings.indent ? '2em' : '0em')
+  root.style.setProperty('--content-align', settings.align)
+  root.style.setProperty('--content-font-family', FONT_FAMILY_STACKS[settings.fontFamily])
+  root.dataset.theme = settings.theme
 }
