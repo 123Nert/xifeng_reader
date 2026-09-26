@@ -167,7 +167,7 @@ describe('bookRepository: 划线（V3.0）', () => {
   it('添加划线后按位置升序列出，仅含本书', async () => {
     await repo.addBook(book('h1', '正文'))
     await repo.addHighlight('h1', 100, 120, '第二段摘抄')
-    await repo.addHighlight('h1', 10, 24, '第一段摘抄', '写得真好')
+    await repo.addHighlight('h1', 10, 24, '第一段摘抄', { note: '写得真好' })
     await repo.addHighlight('other', 5, 9, '别的书')
 
     const list = await repo.listHighlights('h1')

@@ -4,7 +4,9 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Toc } from '../core/toc'
-import type { BookmarkRecord, HighlightRecord } from '../core/bookRepository'
+import type { BookmarkRecord } from '../core/bookRepository'
+import type { HighlightRecord } from '../core/highlight'
+import { NotesList } from './Annotator'
 import type { SearchHit } from '../core/search'
 import {
   AUTO_PAGE_SECONDS,
@@ -44,6 +46,9 @@ interface Props {
   highlights: HighlightRecord[]
   onDeleteHighlight: (id: string) => void
   onExportNotes: () => void
+  onJumpHighlight: (id: string) => void
+  chapterTitles: string[]
+  unresolvedIds: Set<string>
 
   onJumpOffset: (charIndex: number) => void
   onSearch: (query: string) => SearchHit[]
@@ -199,42 +204,15 @@ export default function ReaderMenu(props: Props) {
           )}
 
           {tab === 'notes' && (
-            <div className="bm-list">
-              <div className="bm-toolbar">
-                <button className="btn chip" onClick={props.onExportNotes}>
-                  导出 Markdown
-                </button>
-                <span className="toc-count">{props.highlights.length} 条</span>
-              </div>
-              {props.highlights.length === 0 ? (
-                <div className="menu-empty">选中正文即可添加划线</div>
-              ) : (
-                props.highlights.map((h) => (
-                  <div key={h.id} className="bm-item" onClick={() => props.onJumpOffset(h.start)}>
-                    <div className="bm-main">
-                      <span className="bm-excerpt">{h.text}</span>
-                      <span className="toc-percent">
-                        {props.totalChars > 1
-                          ? Math.round((h.start / (props.totalChars - 1)) * 100) + '%'
-                          : '0%'}
-                      </span>
-                    </div>
-                    {h.note && <div className="bm-sub">{h.note}</div>}
-                    <div className="bm-sub">{new Date(h.createdAt).toLocaleString()}</div>
-                    <button
-                      className="bm-delete"
-                      title="删除划线"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        props.onDeleteHighlight(h.id)
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
+            <NotesList
+              highlights={props.highlights}
+              chapterTitles={props.chapterTitles}
+              totalChars={props.totalChars}
+              onJump={(h) => props.onJumpHighlight(h.id)}
+              onDelete={props.onDeleteHighlight}
+              onExport={props.onExportNotes}
+              unresolvedIds={props.unresolvedIds}
+            />
           )}
 
           {tab === 'search' && (

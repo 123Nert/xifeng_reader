@@ -6,6 +6,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { PageMap, type Measurer, type Page } from '../core/pagination'
 import { buildToc, currentChapterIndex, type Toc } from '../core/toc'
+import {
+  anchorContext,
+  chapterIndexOf,
+  chapterRangesFromToc,
+  HIGHLIGHT_COLOR_LABELS,
+  MARK_STYLE_LABELS,
+  relocateHighlight,
+  type HighlightColor,
+  type HighlightRecord,
+  type MarkStyle,
+} from '../core/highlight'
 import { searchText } from '../core/search'
 import {
   addBookmark,
@@ -17,10 +28,11 @@ import {
   getProgress,
   listBookmarks,
   listHighlights,
+  relocateHighlights,
+  updateHighlight,
   saveProgress,
   updateBookTocPattern,
   type BookmarkRecord,
-  type HighlightRecord,
 } from '../core/bookRepository'
 import {
   applySettingsToDocument,
@@ -35,6 +47,7 @@ import {
   type ThemeName,
 } from '../core/settings'
 import ReaderMenu, { type MenuTab } from './ReaderMenu'
+import { EditCard, SelToolbar, type SelInfo } from './Annotator'
 
 /**
  * 按行切段：与正文渲染共用同一规则（V1.3 排版基础）。
@@ -130,14 +143,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [hlQuery, setHlQuery] = useState<string | null>(null)
   const [autoPlaying, setAutoPlaying] = useState(false)
   const [speaking, setSpeaking] = useState(false)
-  /** 划线悬浮按钮：屏幕坐标 + 选区字符区间 */
-  const [selBtn, setSelBtn] = useState<{
-    x: number
-    y: number
-    start: number
-    end: number
-    text: string
-  } | null>(null)
+  /** 选中态工具栏信息（V4.0） */
+  const [selInfo, setSelInfo] = useState<SelInfo | null>(null)
+  /** 点开的批注编辑卡：命中的批注（可能多条重叠）+ 当前查看索引 */
+  const [editState, setEditState] = useState<{ ids: string[]; index: number } | null>(null)
+  /** 跳转定位后闪烁高亮的批注 id */
+  const [flashId, setFlashId] = useState<string | null>(null)
   /** 滚动模式（V2.1）：锚点页之后已渲染的页数、视口顶部所在页起点 */
   const [extraCount, setExtraCount] = useState(0)
   const [viewStart, setViewStart] = useState(0)
@@ -148,6 +159,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const viewportRef = useRef<HTMLDivElement>(null)
   const probeRef = useRef<HTMLDivElement>(null)
   const viewStartRef = useRef(0)
+  /** 点按判定：记录按下位置与时刻（V4.0 与批注点击共同依赖） */
+  const mouseDownRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const showToast = useCallback((msg: string) => {
@@ -193,7 +206,24 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setToc(buildToc(book.content, book.tocPattern))
       setPatternDraft(book.tocPattern ?? '')
       setBookmarks(await listBookmarks(bookId))
-      setHighlights(await listHighlights(bookId))
+      // 批注：加载后做三层锚定校验，正文变更（如重新净化导入）时自动修复位置
+      const loaded = await listHighlights(bookId)
+      const tocEntries = buildToc(book.content, book.tocPattern).entries
+      const ranges = chapterRangesFromToc(tocEntries, pm.totalChars)
+      const fixed: HighlightRecord[] = []
+      for (const h of loaded) {
+        const r = relocateHighlight(book.content, h, ranges)
+        if (r.level === 1) {
+          fixed.push(h)
+        } else if (r.level === 2 || r.level === 3) {
+          fixed.push({ ...h, start: r.start, end: r.end, updatedAt: Date.now() })
+        } else {
+          fixed.push({ ...h, text: h.text }) // level 0：保留内容，面板中提示位置待确认
+        }
+      }
+      const moved = fixed.filter((f, i) => f.start !== loaded[i].start)
+      if (moved.length > 0) void relocateHighlights(moved)
+      setHighlights(fixed.sort((a, b) => a.start - b.start))
       setReady(true)
       // 打开即记一次"最后阅读时间"
       void saveProgress(bookId, pm.current.start)
@@ -312,45 +342,94 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     [settings, commitSettings, showToast],
   )
 
-  // ---- 划线（V3.0） ----
-  const handleAddHighlight = useCallback(
-    async (start: number, end: number, text: string) => {
-      await addHighlight(bookId, start, end, text)
+  // ---- 批注（V4.0） ----
+
+  /** 新建标注（选色/选样式立即标注；写想法则先建后聚焦输入）。 */
+  const createHighlight = useCallback(
+    async (
+      start: number,
+      end: number,
+      text: string,
+      color: HighlightColor,
+      style: MarkStyle,
+      wantNote = false,
+    ) => {
+      const pm = pagemapRef.current
+      const { prefix, suffix } = anchorContext(textRef.current, start, end)
+      const tocEntries = toc.entries
+      const record = await addHighlight(bookId, start, end, text, {
+        color,
+        style,
+        prefix,
+        suffix,
+        chapterIndex: tocEntries.length > 0 ? chapterIndexOf(tocEntries, start) : undefined,
+      })
       setHighlights(await listHighlights(bookId))
-      setSelBtn(null)
+      setSelInfo(null)
       window.getSelection()?.removeAllRanges()
-      showToast('已添加划线')
+      if (wantNote) {
+        // 直接打开编辑卡，用户可立即写想法（textarea 自动聚焦）
+        setEditState({ ids: [record.id], index: 0 })
+      } else {
+        showToast(`${HIGHLIGHT_COLOR_LABELS[color]}色${MARK_STYLE_LABELS[style]}已添加`)
+      }
+      void pm
     },
-    [bookId, showToast],
+    [bookId, toc.entries, showToast],
   )
 
-  const handleDeleteHighlight = useCallback(
+  /** 更新标注（改色 / 换样式 / 写想法）。 */
+  const patchHighlight = useCallback(
+    async (id: string, patch: Partial<Pick<HighlightRecord, 'color' | 'style' | 'note'>>) => {
+      await updateHighlight(id, patch)
+      setHighlights(await listHighlights(bookId))
+    },
+    [bookId],
+  )
+
+  const removeHighlightById = useCallback(
     async (id: string) => {
       await deleteHighlight(id)
       setHighlights(await listHighlights(bookId))
-      showToast('已删除划线')
+      setEditState(null)
+      showToast('已删除标注')
     },
     [bookId, showToast],
   )
 
-  /** 选区 → 绝对字符区间；鼠标抬起时在选区旁给出"划线"按钮。 */
+  /** 点击正文命中批注 → 打开编辑卡（重叠时携带全部命中 id）。 */
+  const handleContentClick = useCallback(
+    (e: React.MouseEvent) => {
+      const el = (e.target as HTMLElement).closest('mark.hl') as HTMLElement | null
+      if (!el) return false
+      const ids = (el.dataset.ids ?? '').split(',').filter(Boolean)
+      if (ids.length === 0) return false
+      setEditState({ ids, index: 0 })
+      return true
+    },
+    [],
+  )
+
+  /** 选区 → 绝对字符区间；鼠标抬起时在选区旁给出标注工具栏。 */
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    mouseDownRef.current = { x: e.clientX, y: e.clientY, t: Date.now() }
+  }, [])
+
   const handleMouseUp = useCallback(() => {
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
-      setSelBtn(null)
+      setSelInfo(null)
       return
     }
     const text = sel.toString()
-    if (text.trim().length < 2) {
-      setSelBtn(null)
+    if (text.trim().length < 1) {
+      setSelInfo(null)
       return
     }
     const range = sel.getRangeAt(0)
     const absOf = (node: Node, offset: number): number | null => {
-      const el =
-        node.nodeType === Node.TEXT_NODE
-          ? node.parentElement
-          : (node as Element)
+      const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element)
       const para = el?.closest('[data-start]')
       if (!para) return null
       const base = Number(para.getAttribute('data-start'))
@@ -364,43 +443,43 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       }
       return base + acc
     }
-    const s = absOf(range.startContainer, range.startOffset)
-    const e = absOf(range.endContainer, range.endOffset)
-    if (s == null || e == null || e <= s) {
-      setSelBtn(null)
+    const start = absOf(range.startContainer, range.startOffset)
+    const end = absOf(range.endContainer, range.endOffset)
+    if (start == null || end == null || end <= start) {
+      setSelInfo(null)
       return
     }
     const rect = range.getBoundingClientRect()
-    setSelBtn({
-      x: Math.min(Math.max(rect.left + rect.width / 2, 90), window.innerWidth - 90),
-      y: Math.max(rect.top - 8, 60),
-      start: s,
-      end: e,
-      text: text.replace(/\s+/g, ' ').trim().slice(0, 120),
+    setSelInfo({
+      x: Math.min(Math.max(rect.left + rect.width / 2, 150), window.innerWidth - 150),
+      y: Math.max(rect.top - 10, 70),
+      start,
+      end,
+      text: text.replace(/\s+/g, ' ').trim().slice(0, 200),
     })
   }, [])
 
-  /** 点按判定：按下/抬起位移与时长都小才算点按；拖动 = 划选文字，交给浏览器。 */
-  const mouseDownRef = useRef<{ x: number; y: number; t: number } | null>(null)
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return
-    mouseDownRef.current = { x: e.clientX, y: e.clientY, t: Date.now() }
-    setSelBtn(null)
-  }, [])
-
-  /** 鼠标抬起：先捕获划线选区，再按命中区域执行点按（左 30% 上一页 / 右 30% 下一页 / 中间工具栏）。 */
+  /**
+   * 鼠标抬起总入口：先看是否点中已有批注（开编辑卡），否则捕获选区，
+   * 最后按位移/时长判定为"点按"时执行 左30% 上一页 / 右30% 下一页 / 中间开关工具栏。
+   */
   const handleTapOrSelect = useCallback(
     (e: React.MouseEvent) => {
+      if (handleContentClick(e)) {
+        setSelInfo(null)
+        return
+      }
+      setEditState(null)
       handleMouseUp()
+
       const down = mouseDownRef.current
       mouseDownRef.current = null
       if (!down) return
       if (Math.abs(e.clientX - down.x) > 6 || Math.abs(e.clientY - down.y) > 6) return
       if (Date.now() - down.t > 600) return
-      if (e.detail > 1) return // 双击选词不翻页
+      if (e.detail > 1) return
       const target = e.target as HTMLElement
-      if (target.closest('button, input, a, .reader-bar, .menu-sheet, .sel-hl-btn')) return
+      if (target.closest('button, input, textarea, a, .reader-bar, .menu-sheet, .sel-toolbar, .edit-card')) return
       const rect = viewportRef.current?.getBoundingClientRect()
       if (!rect) return
       const x = e.clientX - rect.left
@@ -408,32 +487,68 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       else if (x > rect.width * 0.7) turn(1)
       else setChromeVisible((v) => !v)
     },
-    [handleMouseUp, turn],
+    [handleContentClick, handleMouseUp, turn],
   )
 
-
-  /** 导出划线为 Markdown（V3.0）。 */
-  const handleExportNotes = useCallback(() => {
-    if (highlights.length === 0) {
-      showToast('还没有划线')
-      return
-    }
-    const lines = [`# 《${title}》划线笔记`, '']
-    for (const h of highlights) {
-      const pct = totalChars > 1 ? Math.round((h.start / (totalChars - 1)) * 100) : 0
-      lines.push(`> ${h.text}（${pct}%）`)
-      if (h.note) lines.push('', `  ${h.note}`)
+  /** 导出批注为 Markdown（V4.0-d）：按章节分组、颜色图例、含想法。 */
+  const handleExportNotes = useCallback(
+    (onlyWithNotes = false) => {
+      const list = onlyWithNotes ? highlights.filter((h) => h.note) : highlights
+      if (list.length === 0) {
+        showToast(onlyWithNotes ? '还没有带想法的标注' : '还没有标注')
+        return
+      }
+      const colorEmoji: Record<string, string> = {
+        yellow: '🟡',
+        green: '🟢',
+        blue: '🔵',
+        pink: '🌸',
+        purple: '🟣',
+        orange: '🟠',
+      }
+      const usedColors = [...new Set(list.map((h) => h.color))]
+      const lines = [`# 《${title}》批注笔记`, '']
+      lines.push(`> 导出时间：${new Date().toLocaleString()} · 共 ${list.length} 条${onlyWithNotes ? '（仅有想法）' : ''}`)
+      lines.push(
+        `> 图例：${usedColors.map((c) => `${colorEmoji[c]} ${HIGHLIGHT_COLOR_LABELS[c as HighlightColor]}`).join(' · ')}`,
+      )
       lines.push('')
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${title || '划线'}-笔记.md`
-    a.click()
-    URL.revokeObjectURL(url)
-    showToast('笔记已导出')
-  }, [highlights, title, totalChars, showToast])
+
+      // 按章节分组输出
+      const groups = new Map<number, HighlightRecord[]>()
+      for (const h of list) {
+        const k = h.chapterIndex ?? -1
+        const arr = groups.get(k) ?? []
+        arr.push(h)
+        groups.set(k, arr)
+      }
+      for (const [ci, arr] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
+        const chapterName =
+          ci >= 0 && toc.entries[ci] ? toc.entries[ci].title : ci >= 0 ? `第 ${ci + 1} 章` : '未归类'
+        lines.push(`## ${chapterName}`, '')
+        for (const h of arr) {
+          const pct = totalChars > 1 ? Math.round((h.start / (totalChars - 1)) * 100) : 0
+          const styleTag = h.style === 'highlight' ? '' : ` · ${MARK_STYLE_LABELS[h.style]}`
+          lines.push(`**${colorEmoji[h.color]} ${HIGHLIGHT_COLOR_LABELS[h.color]}${styleTag}**（${pct}%）`)
+          lines.push(`> ${h.text}`)
+          if (h.note) {
+            lines.push('')
+            lines.push(`💭 ${h.note}`)
+          }
+          lines.push('', '---', '')
+        }
+      }
+      const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${title || '批注'}-笔记.md`
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast(`已导出 ${list.length} 条批注`)
+    },
+    [highlights, title, totalChars, toc.entries, showToast],
+  )
 
   // ---- TTS 朗读（V3.0）：按句朗读当前页，读完自动翻页继续；停止即取消 ----
   useEffect(() => {
@@ -655,6 +770,24 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     [bookId],
   )
 
+  /** 位置待确认的批注（重定位失败，level 0）：由重定位结果标记 */
+  const unresolvedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const h of highlights) {
+      if (h.text && !textRef.current.slice(h.start, h.end).startsWith(h.text.slice(0, 8))) {
+        ids.add(h.id)
+      }
+    }
+    return ids
+  }, [highlights, page])
+
+  /** 跳转后的闪烁定位（V4.0-c） */
+  useEffect(() => {
+    if (!flashId) return
+    const timer = window.setTimeout(() => setFlashId(null), 1600)
+    return () => window.clearTimeout(timer)
+  }, [flashId])
+
   const progressStart = isScroll ? viewStart : page.start
   const percent =
     totalChars > 1 ? (page.end >= totalChars ? 1 : progressStart / (totalChars - 1)) : 0
@@ -663,51 +796,79 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     toc.entries.length > 0 ? currentChapterIndex(toc.entries, progressStart) : -1
   const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
 
-  /** 单行渲染：搜索命中（hit）与划线（hl）分段高亮，lineAbs 为行首绝对偏移。 */
+  /**
+   * 单行渲染：搜索命中（hit）+ 批注（hl，带颜色/样式）分段渲染。
+   * 分段记录每段归属的全部批注 id（重叠时点击可切换编辑对象）。
+   */
   const renderLine = (line: string, lineAbs: number): ReactNode => {
     const q = hlQuery?.trim().toLowerCase()
-    const ranges: Array<{ s: number; e: number; hl: boolean; hit: boolean }> = []
+    const cuts = new Set<number>([0, line.length])
+    const segs: Array<{ s: number; e: number; ids: string[] }> = []
+    const hits: Array<{ s: number; e: number }> = []
+
     if (q) {
       const lower = line.toLowerCase()
       let from = 0
       for (;;) {
         const idx = lower.indexOf(q, from)
         if (idx < 0) break
-        ranges.push({ s: idx, e: idx + q.length, hl: false, hit: true })
+        hits.push({ s: idx, e: idx + q.length })
+        cuts.add(idx)
+        cuts.add(idx + q.length)
         from = idx + 1
       }
     }
+    // 与本行有交集的批注（含跨行/跨页片段）
+    const lineAnchors: Array<{ id: string; color: HighlightColor; style: MarkStyle; s: number; e: number }> = []
     for (const h of highlights) {
-      const s = h.start - lineAbs
-      const e = h.end - lineAbs
-      if (e <= 0 || s >= line.length) continue
-      ranges.push({ s: Math.max(0, s), e: Math.min(line.length, e), hl: true, hit: false })
+      const rs = h.start - lineAbs
+      const re = h.end - lineAbs
+      if (re <= 0 || rs >= line.length) continue
+      const s = Math.max(0, rs)
+      const e = Math.min(line.length, re)
+      lineAnchors.push({ id: h.id, color: h.color, style: h.style, s, e })
+      cuts.add(s)
+      cuts.add(e)
     }
-    if (ranges.length === 0) return line
-    const cuts = new Set<number>([0, line.length])
-    for (const r of ranges) {
-      cuts.add(r.s)
-      cuts.add(r.e)
-    }
+    if (lineAnchors.length === 0 && hits.length === 0) return line
+
     const bounds = [...cuts].sort((a, b) => a - b)
-    const parts: ReactNode[] = []
     for (let i = 0; i < bounds.length - 1; i++) {
       const s = bounds[i]
       const e = bounds[i + 1]
       if (e <= s) continue
-      const hl = ranges.some((r) => r.hl && r.s <= s && e <= r.e)
-      const hit = ranges.some((r) => r.hit && r.s <= s && e <= r.e)
-      parts.push(
-        hl || hit ? (
-          <mark key={s} className={hl ? 'hl' : 'hit'}>
-            {line.slice(s, e)}
-          </mark>
-        ) : (
-          line.slice(s, e)
-        ),
-      )
+      const ids = lineAnchors.filter((a) => a.s <= s && e <= a.e).map((a) => a.id)
+      segs.push({ s, e, ids })
     }
-    return parts
+
+    return segs.map((seg) => {
+      const text = line.slice(seg.s, seg.e)
+      if (seg.ids.length > 0) {
+        // 取最后一条（最新）批注的样式作为视觉呈现；data-ids 携带全部归属供点击切换
+        const top = highlights.filter((h) => h.id === seg.ids[seg.ids.length - 1])[0]
+        if (top) {
+          return (
+            <mark
+              key={seg.s}
+              className={`hl${flashId && seg.ids.includes(flashId) ? ' flash' : ''}`}
+              data-ids={seg.ids.join(',')}
+              data-color={top.color}
+              data-style={top.style}
+            >
+              {text}
+            </mark>
+          )
+        }
+      }
+      if (hits.some((h) => h.s <= seg.s && seg.e <= h.e)) {
+        return (
+          <mark key={seg.s} className="hit">
+            {text}
+          </mark>
+        )
+      }
+      return text
+    })
   }
 
   /** 一页文本 → 段落块序列（data-start 为段落绝对偏移，供划线选区定位）。 */
@@ -814,22 +975,61 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         </div>
       </footer>
 
-      {/* 划线悬浮按钮（V3.0） */}
-      {selBtn && (
-        <button
-          className="sel-hl-btn"
-          style={{ left: selBtn.x, top: selBtn.y }}
-          onClick={() => void handleAddHighlight(selBtn.start, selBtn.end, selBtn.text)}
-        >
-          划线
-        </button>
+      {/* 选中态标注工具栏（V4.0-a/b） */}
+      {selInfo && !editState && (
+        <SelToolbar
+          sel={selInfo}
+          onMark={(color, style) =>
+            void createHighlight(selInfo.start, selInfo.end, selInfo.text, color, style)
+          }
+          onNote={(color, style) =>
+            void createHighlight(selInfo.start, selInfo.end, selInfo.text, color, style, true)
+          }
+          onClose={() => setSelInfo(null)}
+        />
+      )}
+
+      {/* 批注编辑卡（V4.0-b/c） */}
+      {editState && (
+        <div className="edit-card-mask" onClick={() => setEditState(null)}>
+          <EditCard
+            items={
+              editState.ids
+                .map((id) => highlights.find((h) => h.id === id))
+                .filter(Boolean) as HighlightRecord[]
+            }
+            index={Math.min(editState.index, editState.ids.length - 1)}
+            onSwitch={(next) => setEditState({ ...editState, index: next })}
+            onRecolor={(color) => void patchHighlight(editState.ids[editState.index], { color })}
+            onRestyle={(style) => void patchHighlight(editState.ids[editState.index], { style })}
+            onSaveNote={(note) => void patchHighlight(editState.ids[editState.index], { note })}
+            onDelete={() => void removeHighlightById(editState.ids[editState.index])}
+            onCopy={() => {
+              const cur = highlights.find((h) => h.id === editState.ids[editState.index])
+              if (cur) {
+                void navigator.clipboard?.writeText(cur.text)
+                showToast('已复制原文')
+              }
+            }}
+            onClose={() => setEditState(null)}
+          />
+        </div>
       )}
 
       {/* 阅读菜单（V1.2）：目录 / 书签 / 笔记 / 搜索 / 设置 */}
       <ReaderMenu
         highlights={highlights}
-        onDeleteHighlight={(id) => void handleDeleteHighlight(id)}
-        onExportNotes={handleExportNotes}
+        onDeleteHighlight={(id) => void removeHighlightById(id)}
+        onExportNotes={() => handleExportNotes(false)}
+        onJumpHighlight={(id) => {
+          const h = highlights.find((x) => x.id === id)
+          if (h) {
+            jumpToOffset(h.start)
+            setFlashId(h.id)
+          }
+        }}
+        chapterTitles={toc.entries.map((e) => e.title)}
+        unresolvedIds={unresolvedIds}
         open={menuOpen}
         tab={menuTab}
         onTabChange={setMenuTab}

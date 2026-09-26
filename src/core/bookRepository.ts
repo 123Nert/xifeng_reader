@@ -10,6 +10,14 @@
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import {
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_MARK_STYLE,
+  normalizeHighlight,
+  type HighlightColor,
+  type HighlightRecord,
+  type MarkStyle,
+} from './highlight'
 
 export interface BookRecord {
   id: string
@@ -45,16 +53,10 @@ export interface DayStatRecord {
   minutes: number
 }
 
-/** V3.0 划线：字符区间 + 原文摘录（可选随想）。 */
-export interface HighlightRecord {
-  id: string
-  bookId: string
-  start: number
-  end: number
-  text: string
-  note?: string
-  createdAt: number
-}
+// V4.0：批注模型（颜色/样式/锚定）见 core/highlight.ts，此处再导出便于调用方单点引入
+export type { HighlightRecord } from './highlight'
+export { normalizeHighlight } from './highlight'
+
 
 /** 书库列表项：书籍元信息 + 合并后的阅读进度，不含正文。 */
 export interface LibraryEntry {
@@ -231,7 +233,14 @@ export async function addHighlight(
   start: number,
   end: number,
   text: string,
-  note?: string,
+  options: {
+    color?: HighlightColor
+    style?: MarkStyle
+    note?: string
+    prefix?: string
+    suffix?: string
+    chapterIndex?: number
+  } = {},
 ): Promise<HighlightRecord> {
   const db = await getDB()
   const record: HighlightRecord = {
@@ -240,18 +249,54 @@ export async function addHighlight(
     start,
     end,
     text,
-    ...(note ? { note } : {}),
+    color: options.color ?? DEFAULT_HIGHLIGHT_COLOR,
+    style: options.style ?? DEFAULT_MARK_STYLE,
+    ...(options.note ? { note: options.note } : {}),
+    ...(options.prefix ? { prefix: options.prefix } : {}),
+    ...(options.suffix ? { suffix: options.suffix } : {}),
+    ...(options.chapterIndex != null ? { chapterIndex: options.chapterIndex } : {}),
     createdAt: Date.now(),
   }
   await db.put('highlights', record)
   return record
 }
 
-/** 某本书的全部划线，按位置升序。 */
+/**
+ * 局部更新一条批注（改色/换样式/写想法）。不动锚定字段。
+ * 传入 note 为空串表示清除想法。
+ */
+export async function updateHighlight(
+  id: string,
+  patch: Partial<Pick<HighlightRecord, 'color' | 'style' | 'note'>>,
+): Promise<HighlightRecord | undefined> {
+  const db = await getDB()
+  const record = await db.get('highlights', id)
+  if (!record) return undefined
+  const next: HighlightRecord = { ...record, updatedAt: Date.now() }
+  if (patch.color !== undefined) next.color = patch.color
+  if (patch.style !== undefined) next.style = patch.style
+  if (patch.note !== undefined) {
+    const trimmed = patch.note.trim()
+    if (trimmed) next.note = trimmed
+    else delete next.note
+  }
+  await db.put('highlights', next)
+  return next
+}
+
+/** 批量重定位（正文变更后修复锚点）。 */
+export async function relocateHighlights(records: HighlightRecord[]): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction('highlights', 'readwrite')
+  for (const r of records) await tx.objectStore('highlights').put(r)
+  await tx.done
+}
+
+/** 某本书的全部划线，按位置升序；老记录在此统一归一化（不改库）。 */
 export async function listHighlights(bookId: string): Promise<HighlightRecord[]> {
   const db = await getDB()
   const list = await db.getAllFromIndex('highlights', 'by-book', bookId)
-  return list.sort((a, b) => a.start - b.start)
+  return list.map((r) => normalizeHighlight(r)).sort((a, b) => a.start - b.start)
 }
 
 export async function deleteHighlight(id: string): Promise<void> {
