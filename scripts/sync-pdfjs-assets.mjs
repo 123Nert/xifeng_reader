@@ -12,14 +12,23 @@
  *   本项目只做文本抽取，用不到；省下约 900KB。
  *
  * 由 package.json 的 predev / prebuild / pretest 钩子自动调用，也可手动 `node scripts/...`。
+ *
+ * 已知坑：取决于启动器的 cwd 与 Node 版本对非 ASCII 路径的解析方式，
+ * `fileURLToPath(import.meta.url)` 返回的可能是已按 ANSI/latin1 解码的伪路径
+ *（例如把 `C:/Users/x/xifeng_阅读` 写成 `C:/Users/x/xifeng_闃呰`）。
+ * 本脚本用 `realpathSync + existsSync` 兜底：解析失败就回退到 `process.cwd()`。
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const projectRoot = join(here, '..')
+// existsSync 是为了兜底 fileURLToPath 在部分 Windows / 中文路径环境下的解析偏差：
+// 若脚本目录解析失败（输出目录都不存在），就用 process.cwd() —— npm-run-script 的 cwd
+// 总是项目根，这样能一致命中真正的项目目录。
+const candidate = join(here, '..')
+const projectRoot = existsSync(join(candidate, 'package.json')) ? candidate : resolve(process.cwd())
 const destRoot = join(projectRoot, 'public', 'pdfjs')
 
 /** 需要随应用分发的 pdf.js 资源目录。 */
