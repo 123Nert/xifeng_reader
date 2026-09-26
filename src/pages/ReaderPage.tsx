@@ -380,6 +380,38 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     })
   }, [])
 
+  /** 点按判定：按下/抬起位移与时长都小才算点按；拖动 = 划选文字，交给浏览器。 */
+  const mouseDownRef = useRef<{ x: number; y: number; t: number } | null>(null)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    mouseDownRef.current = { x: e.clientX, y: e.clientY, t: Date.now() }
+    setSelBtn(null)
+  }, [])
+
+  /** 鼠标抬起：先捕获划线选区，再按命中区域执行点按（左 30% 上一页 / 右 30% 下一页 / 中间工具栏）。 */
+  const handleTapOrSelect = useCallback(
+    (e: React.MouseEvent) => {
+      handleMouseUp()
+      const down = mouseDownRef.current
+      mouseDownRef.current = null
+      if (!down) return
+      if (Math.abs(e.clientX - down.x) > 6 || Math.abs(e.clientY - down.y) > 6) return
+      if (Date.now() - down.t > 600) return
+      if (e.detail > 1) return // 双击选词不翻页
+      const target = e.target as HTMLElement
+      if (target.closest('button, input, a, .reader-bar, .menu-sheet, .sel-hl-btn')) return
+      const rect = viewportRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const x = e.clientX - rect.left
+      if (x < rect.width * 0.3) turn(-1)
+      else if (x > rect.width * 0.7) turn(1)
+      else setChromeVisible((v) => !v)
+    },
+    [handleMouseUp, turn],
+  )
+
+
   /** 导出划线为 Markdown（V3.0）。 */
   const handleExportNotes = useCallback(() => {
     if (highlights.length === 0) {
@@ -707,8 +739,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       <main
         ref={viewportRef}
         className={`page-viewport${isScroll ? ' scroll-mode' : ''}`}
-        onMouseUp={handleMouseUp}
-        onMouseDown={() => setSelBtn(null)}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleTapOrSelect}
         onScroll={isScroll ? handleScrollFlow : undefined}
       >
         {isScroll ? (
@@ -735,13 +767,6 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         )}
         {/* 离屏测量探针：与正文同宽同样式，仅用于分页测量 */}
         <div ref={probeRef} className="page-probe" aria-hidden="true" />
-        <div className="tap-zone left" title="上一页（←）" onClick={() => turn(-1)} />
-        <div
-          className="tap-zone center"
-          title="显示 / 隐藏工具栏"
-          onClick={() => setChromeVisible((v) => !v)}
-        />
-        <div className="tap-zone right" title="下一页（→）" onClick={() => turn(1)} />
         {!ready && <div className="reader-loading">打开中…</div>}
       </main>
 

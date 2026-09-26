@@ -320,11 +320,6 @@ button {
   overscroll-behavior: contain;
 }
 
-.scroll-mode .tap-zone.left,
-.scroll-mode .tap-zone.right {
-  pointer-events: none; /* 触摸/滚轮滚动不被点按区域拦截，左右翻页用按钮与键盘 */
-}
-
 .scroll-flow,
 .scroll-page {
   font-size: var(--content-font-size);
@@ -359,29 +354,6 @@ button {
 }
 
 /* 翻页点按区域 */
-.tap-zone {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 2;
-  cursor: pointer;
-}
-
-.tap-zone.left {
-  left: 0;
-  width: 30%;
-}
-
-.tap-zone.right {
-  right: 0;
-  width: 30%;
-}
-
-.tap-zone.center {
-  left: 30%;
-  right: 30%;
-}
-
 /* 顶栏 / 底栏：悬浮层，显隐不影响正文区尺寸 */
 .reader-bar {
   position: absolute;
