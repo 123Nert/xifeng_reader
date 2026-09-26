@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Toc } from '../core/toc'
-import type { BookmarkRecord } from '../core/bookRepository'
+import type { BookmarkRecord, HighlightRecord } from '../core/bookRepository'
 import type { SearchHit } from '../core/search'
 import {
   AUTO_PAGE_SECONDS,
@@ -23,7 +23,7 @@ import {
   type ThemeName,
 } from '../core/settings'
 
-export type MenuTab = 'toc' | 'marks' | 'search' | 'settings'
+export type MenuTab = 'toc' | 'marks' | 'notes' | 'search' | 'settings'
 
 interface Props {
   open: boolean
@@ -41,6 +41,9 @@ interface Props {
   bookmarks: BookmarkRecord[]
   onAddBookmark: () => void
   onDeleteBookmark: (id: string) => void
+  highlights: HighlightRecord[]
+  onDeleteHighlight: (id: string) => void
+  onExportNotes: () => void
 
   onJumpOffset: (charIndex: number) => void
   onSearch: (query: string) => SearchHit[]
@@ -62,6 +65,7 @@ interface Props {
 const TABS: Array<{ key: MenuTab; label: string }> = [
   { key: 'toc', label: '目录' },
   { key: 'marks', label: '书签' },
+  { key: 'notes', label: '笔记' },
   { key: 'search', label: '搜索' },
   { key: 'settings', label: '设置' },
 ]
@@ -184,6 +188,45 @@ export default function ReaderMenu(props: Props) {
                       onClick={(e) => {
                         e.stopPropagation()
                         props.onDeleteBookmark(b.id)
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {tab === 'notes' && (
+            <div className="bm-list">
+              <div className="bm-toolbar">
+                <button className="btn chip" onClick={props.onExportNotes}>
+                  导出 Markdown
+                </button>
+                <span className="toc-count">{props.highlights.length} 条</span>
+              </div>
+              {props.highlights.length === 0 ? (
+                <div className="menu-empty">选中正文即可添加划线</div>
+              ) : (
+                props.highlights.map((h) => (
+                  <div key={h.id} className="bm-item" onClick={() => props.onJumpOffset(h.start)}>
+                    <div className="bm-main">
+                      <span className="bm-excerpt">{h.text}</span>
+                      <span className="toc-percent">
+                        {props.totalChars > 1
+                          ? Math.round((h.start / (props.totalChars - 1)) * 100) + '%'
+                          : '0%'}
+                      </span>
+                    </div>
+                    {h.note && <div className="bm-sub">{h.note}</div>}
+                    <div className="bm-sub">{new Date(h.createdAt).toLocaleString()}</div>
+                    <button
+                      className="bm-delete"
+                      title="删除划线"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        props.onDeleteHighlight(h.id)
                       }}
                     >
                       ✕

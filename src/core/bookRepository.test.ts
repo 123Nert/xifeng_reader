@@ -163,6 +163,40 @@ describe('bookRepository: 重命名（V2.0）', () => {
   })
 })
 
+describe('bookRepository: 划线（V3.0）', () => {
+  it('添加划线后按位置升序列出，仅含本书', async () => {
+    await repo.addBook(book('h1', '正文'))
+    await repo.addHighlight('h1', 100, 120, '第二段摘抄')
+    await repo.addHighlight('h1', 10, 24, '第一段摘抄', '写得真好')
+    await repo.addHighlight('other', 5, 9, '别的书')
+
+    const list = await repo.listHighlights('h1')
+    expect(list.map((x) => x.start)).toEqual([10, 100])
+    expect(list[0].note).toBe('写得真好')
+    expect(list.every((x) => x.bookId === 'h1')).toBe(true)
+  })
+
+  it('删除划线后列表不再包含', async () => {
+    await repo.addBook(book('h2', '正文'))
+    const added = await repo.addHighlight('h2', 3, 8, '摘录')
+    await repo.deleteHighlight(added.id)
+    expect(await repo.listHighlights('h2')).toHaveLength(0)
+  })
+
+  it('备份包含划线并可恢复', async () => {
+    await repo.addBook(book('h3', '正文'))
+    await repo.addHighlight('h3', 3, 8, '摘录')
+    const backup = await repo.exportBackup({})
+    expect(backup.highlights).toHaveLength(1)
+
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+    await repo.importBackup(backup)
+    expect(await repo.listHighlights('h3')).toHaveLength(1)
+  })
+})
+
 describe('bookRepository: 备份与恢复（V2.0）', () => {
   it('导出→清空→导入 后数据完好', async () => {
     await repo.addBook(book('bk', '正文体'))

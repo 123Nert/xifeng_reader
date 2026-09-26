@@ -9,14 +9,18 @@ import { buildToc, currentChapterIndex, type Toc } from '../core/toc'
 import { searchText } from '../core/search'
 import {
   addBookmark,
+  addHighlight,
   addReadingMinutes,
   deleteBookmark,
+  deleteHighlight,
   getBook,
   getProgress,
   listBookmarks,
+  listHighlights,
   saveProgress,
   updateBookTocPattern,
   type BookmarkRecord,
+  type HighlightRecord,
 } from '../core/bookRepository'
 import {
   applySettingsToDocument,
@@ -39,6 +43,20 @@ import ReaderMenu, { type MenuTab } from './ReaderMenu'
  */
 function splitParas(slice: string): string[] {
   return slice.split(/\r\n|\r|\n/).filter((line) => line.length > 0)
+}
+
+/** 带相对偏移的切段（渲染段落带 data-start 绝对偏移，供划线定位）。 */
+function splitParasRel(slice: string): Array<{ text: string; rel: number }> {
+  const out: Array<{ text: string; rel: number }> = []
+  let start = 0
+  for (let i = 0; i <= slice.length; i++) {
+    if (i === slice.length || slice[i] === '\n') {
+      const line = slice.slice(start, i).replace(/\r$/, '')
+      if (line.length > 0) out.push({ text: line, rel: start })
+      start = i + 1
+    }
+  }
+  return out
 }
 
 /** DOM 版切段（供测量探针使用）。 */
@@ -108,8 +126,18 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [menuTab, setMenuTab] = useState<MenuTab>('toc')
   const [patternDraft, setPatternDraft] = useState('')
   const [bookmarks, setBookmarks] = useState<BookmarkRecord[]>([])
+  const [highlights, setHighlights] = useState<HighlightRecord[]>([])
   const [hlQuery, setHlQuery] = useState<string | null>(null)
   const [autoPlaying, setAutoPlaying] = useState(false)
+  const [speaking, setSpeaking] = useState(false)
+  /** 划线悬浮按钮：屏幕坐标 + 选区字符区间 */
+  const [selBtn, setSelBtn] = useState<{
+    x: number
+    y: number
+    start: number
+    end: number
+    text: string
+  } | null>(null)
   /** 滚动模式（V2.1）：锚点页之后已渲染的页数、视口顶部所在页起点 */
   const [extraCount, setExtraCount] = useState(0)
   const [viewStart, setViewStart] = useState(0)
@@ -165,6 +193,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setToc(buildToc(book.content, book.tocPattern))
       setPatternDraft(book.tocPattern ?? '')
       setBookmarks(await listBookmarks(bookId))
+      setHighlights(await listHighlights(bookId))
       setReady(true)
       // 打开即记一次"最后阅读时间"
       void saveProgress(bookId, pm.current.start)
@@ -282,6 +311,138 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     },
     [settings, commitSettings, showToast],
   )
+
+  // ---- 划线（V3.0） ----
+  const handleAddHighlight = useCallback(
+    async (start: number, end: number, text: string) => {
+      await addHighlight(bookId, start, end, text)
+      setHighlights(await listHighlights(bookId))
+      setSelBtn(null)
+      window.getSelection()?.removeAllRanges()
+      showToast('已添加划线')
+    },
+    [bookId, showToast],
+  )
+
+  const handleDeleteHighlight = useCallback(
+    async (id: string) => {
+      await deleteHighlight(id)
+      setHighlights(await listHighlights(bookId))
+      showToast('已删除划线')
+    },
+    [bookId, showToast],
+  )
+
+  /** 选区 → 绝对字符区间；鼠标抬起时在选区旁给出"划线"按钮。 */
+  const handleMouseUp = useCallback(() => {
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setSelBtn(null)
+      return
+    }
+    const text = sel.toString()
+    if (text.trim().length < 2) {
+      setSelBtn(null)
+      return
+    }
+    const range = sel.getRangeAt(0)
+    const absOf = (node: Node, offset: number): number | null => {
+      const el =
+        node.nodeType === Node.TEXT_NODE
+          ? node.parentElement
+          : (node as Element)
+      const para = el?.closest('[data-start]')
+      if (!para) return null
+      const base = Number(para.getAttribute('data-start'))
+      let acc = 0
+      const walker = document.createTreeWalker(para, NodeFilter.SHOW_TEXT)
+      let n: Node | null = walker.nextNode()
+      while (n) {
+        if (n === node) return base + acc + offset
+        acc += n.textContent?.length ?? 0
+        n = walker.nextNode()
+      }
+      return base + acc
+    }
+    const s = absOf(range.startContainer, range.startOffset)
+    const e = absOf(range.endContainer, range.endOffset)
+    if (s == null || e == null || e <= s) {
+      setSelBtn(null)
+      return
+    }
+    const rect = range.getBoundingClientRect()
+    setSelBtn({
+      x: Math.min(Math.max(rect.left + rect.width / 2, 90), window.innerWidth - 90),
+      y: Math.max(rect.top - 8, 60),
+      start: s,
+      end: e,
+      text: text.replace(/\s+/g, ' ').trim().slice(0, 120),
+    })
+  }, [])
+
+  /** 导出划线为 Markdown（V3.0）。 */
+  const handleExportNotes = useCallback(() => {
+    if (highlights.length === 0) {
+      showToast('还没有划线')
+      return
+    }
+    const lines = [`# 《${title}》划线笔记`, '']
+    for (const h of highlights) {
+      const pct = totalChars > 1 ? Math.round((h.start / (totalChars - 1)) * 100) : 0
+      lines.push(`> ${h.text}（${pct}%）`)
+      if (h.note) lines.push('', `  ${h.note}`)
+      lines.push('')
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${title || '划线'}-笔记.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast('笔记已导出')
+  }, [highlights, title, totalChars, showToast])
+
+  // ---- TTS 朗读（V3.0）：按句朗读当前页，读完自动翻页继续；停止即取消 ----
+  useEffect(() => {
+    if (!speaking || !ready) return
+    const synth = window.speechSynthesis
+    if (!synth) {
+      showToast('当前浏览器不支持朗读')
+      setSpeaking(false)
+      return
+    }
+    const pm = pagemapRef.current
+    if (!pm) return
+    const pageStr = textRef.current.slice(page.start, page.end)
+    const sentences = pageStr.match(/[^。！？!?…\n]+[。！？!?…\n]*/g) ?? [pageStr]
+    let idx = 0
+    let cancelled = false
+    const speakNext = () => {
+      if (cancelled) return
+      if (idx >= sentences.length) {
+        if (pm.atLastPage) {
+          setSpeaking(false)
+          showToast('全书朗读结束')
+          return
+        }
+        pm.goNext()
+        setPage({ ...pm.current })
+        void saveProgress(bookId, pm.current.start) // page.start 变化触发本 effect 朗读下一页
+        return
+      }
+      const u = new SpeechSynthesisUtterance(sentences[idx++])
+      u.lang = 'zh-CN'
+      u.onend = () => speakNext()
+      u.onerror = () => setSpeaking(false)
+      synth.speak(u)
+    }
+    speakNext()
+    return () => {
+      cancelled = true
+      synth.cancel()
+    }
+  }, [speaking, ready, page.start, bookId, showToast])
 
   /** 目录 / 书签 / 搜索统一跳转：与进度条共用 PageMap.jumpTo，同一字符偏移坐标系。 */
   const jumpToOffset = useCallback(
@@ -470,39 +631,64 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     toc.entries.length > 0 ? currentChapterIndex(toc.entries, progressStart) : -1
   const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
 
-  /** 单行渲染：命中搜索词时高亮。 */
-  const renderLine = (line: string, key: string | number): ReactNode => {
+  /** 单行渲染：搜索命中（hit）与划线（hl）分段高亮，lineAbs 为行首绝对偏移。 */
+  const renderLine = (line: string, lineAbs: number): ReactNode => {
     const q = hlQuery?.trim().toLowerCase()
-    if (!q) return line
-    const lower = line.toLowerCase()
-    if (!lower.includes(q)) return line
-    const parts: ReactNode[] = []
-    let from = 0
-    let k = 0
-    for (;;) {
-      const idx = lower.indexOf(q, from)
-      if (idx < 0) {
-        parts.push(line.slice(from))
-        break
+    const ranges: Array<{ s: number; e: number; hl: boolean; hit: boolean }> = []
+    if (q) {
+      const lower = line.toLowerCase()
+      let from = 0
+      for (;;) {
+        const idx = lower.indexOf(q, from)
+        if (idx < 0) break
+        ranges.push({ s: idx, e: idx + q.length, hl: false, hit: true })
+        from = idx + 1
       }
-      parts.push(line.slice(from, idx))
-      parts.push(<mark key={`${key}-${k++}`}>{line.slice(idx, idx + q.length)}</mark>)
-      from = idx + q.length
+    }
+    for (const h of highlights) {
+      const s = h.start - lineAbs
+      const e = h.end - lineAbs
+      if (e <= 0 || s >= line.length) continue
+      ranges.push({ s: Math.max(0, s), e: Math.min(line.length, e), hl: true, hit: false })
+    }
+    if (ranges.length === 0) return line
+    const cuts = new Set<number>([0, line.length])
+    for (const r of ranges) {
+      cuts.add(r.s)
+      cuts.add(r.e)
+    }
+    const bounds = [...cuts].sort((a, b) => a - b)
+    const parts: ReactNode[] = []
+    for (let i = 0; i < bounds.length - 1; i++) {
+      const s = bounds[i]
+      const e = bounds[i + 1]
+      if (e <= s) continue
+      const hl = ranges.some((r) => r.hl && r.s <= s && e <= r.e)
+      const hit = ranges.some((r) => r.hit && r.s <= s && e <= r.e)
+      parts.push(
+        hl || hit ? (
+          <mark key={s} className={hl ? 'hl' : 'hit'}>
+            {line.slice(s, e)}
+          </mark>
+        ) : (
+          line.slice(s, e)
+        ),
+      )
     }
     return parts
   }
 
-  /** 一页文本 → 段落块序列（与测量探针共用同一结构规则）。 */
-  const renderSlice = (slice: string): ReactNode =>
-    splitParas(slice).map((line, i) => (
-      <div className="page-para" key={i}>
-        {renderLine(line, i)}
+  /** 一页文本 → 段落块序列（data-start 为段落绝对偏移，供划线选区定位）。 */
+  const renderSlice = (slice: string, base: number): ReactNode =>
+    splitParasRel(slice).map(({ text, rel }) => (
+      <div className="page-para" key={rel} data-start={base + rel}>
+        {renderLine(text, base + rel)}
       </div>
     ))
 
   const renderContent = (): ReactNode => {
     if (!pageText) return ready && totalChars === 0 ? '（这本书没有正文内容）' : ''
-    return renderSlice(pageText)
+    return renderSlice(pageText, page.start)
   }
 
   return (
@@ -518,7 +704,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         <div className="top-spacer" />
       </header>
 
-      <main ref={viewportRef} className={`page-viewport${isScroll ? ' scroll-mode' : ''}`}>
+      <main
+        ref={viewportRef}
+        className={`page-viewport${isScroll ? ' scroll-mode' : ''}`}
+        onMouseUp={handleMouseUp}
+        onMouseDown={() => setSelBtn(null)}
+      >
         {isScroll ? (
           <div className="scroll-flow" onScroll={handleScrollFlow}>
             {totalChars === 0 ? (
@@ -526,11 +717,11 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
             ) : (
               <>
                 <div className="scroll-page" data-start={page.start}>
-                  {renderSlice(pageText)}
+                  {renderSlice(pageText, page.start)}
                 </div>
                 {extraPages.map((p) => (
                   <div className="scroll-page" key={p.start} data-start={p.start}>
-                    {renderSlice(textRef.current.slice(p.start, p.end))}
+                    {renderSlice(textRef.current.slice(p.start, p.end), p.start)}
                   </div>
                 ))}
               </>
@@ -574,6 +765,13 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
             >
               {autoPlaying ? '⏸ 停止' : '▶ 自动'}
             </button>
+            <button
+              className={`btn chip${speaking ? ' active' : ''}`}
+              title="朗读当前页（读完自动翻页）"
+              onClick={() => setSpeaking((v) => !v)}
+            >
+              {speaking ? '⏹ 停止朗读' : '🔊 朗读'}
+            </button>
             <button className="btn chip" onClick={() => openMenu('toc')}>
               目录
             </button>
@@ -590,8 +788,22 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         </div>
       </footer>
 
-      {/* 阅读菜单（V1.2）：目录 / 书签 / 搜索 / 设置 */}
+      {/* 划线悬浮按钮（V3.0） */}
+      {selBtn && (
+        <button
+          className="sel-hl-btn"
+          style={{ left: selBtn.x, top: selBtn.y }}
+          onClick={() => void handleAddHighlight(selBtn.start, selBtn.end, selBtn.text)}
+        >
+          划线
+        </button>
+      )}
+
+      {/* 阅读菜单（V1.2）：目录 / 书签 / 笔记 / 搜索 / 设置 */}
       <ReaderMenu
+        highlights={highlights}
+        onDeleteHighlight={(id) => void handleDeleteHighlight(id)}
+        onExportNotes={handleExportNotes}
         open={menuOpen}
         tab={menuTab}
         onTabChange={setMenuTab}

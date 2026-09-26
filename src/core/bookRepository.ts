@@ -45,6 +45,17 @@ export interface DayStatRecord {
   minutes: number
 }
 
+/** V3.0 划线：字符区间 + 原文摘录（可选随想）。 */
+export interface HighlightRecord {
+  id: string
+  bookId: string
+  start: number
+  end: number
+  text: string
+  note?: string
+  createdAt: number
+}
+
 /** 书库列表项：书籍元信息 + 合并后的阅读进度，不含正文。 */
 export interface LibraryEntry {
   id: string
@@ -66,10 +77,15 @@ interface XifengDB extends DBSchema {
     indexes: { 'by-book': string }
   }
   stats: { key: string; value: DayStatRecord }
+  highlights: {
+    key: string
+    value: HighlightRecord
+    indexes: { 'by-book': string }
+  }
 }
 
 const DB_NAME = 'xifeng-reader'
-const DB_VERSION = 3
+const DB_VERSION = 4
 
 let dbPromise: Promise<IDBPDatabase<XifengDB>> | null = null
 
@@ -87,6 +103,10 @@ function getDB(): Promise<IDBPDatabase<XifengDB>> {
         }
         if (oldVersion < 3) {
           db.createObjectStore('stats', { keyPath: 'day' })
+        }
+        if (oldVersion < 4) {
+          const store = db.createObjectStore('highlights', { keyPath: 'id' })
+          store.createIndex('by-book', 'bookId')
         }
       },
     })
@@ -204,6 +224,41 @@ export async function deleteBookmark(id: string): Promise<void> {
   await db.delete('bookmarks', id)
 }
 
+// ---------- 划线（V3.0） ----------
+
+export async function addHighlight(
+  bookId: string,
+  start: number,
+  end: number,
+  text: string,
+  note?: string,
+): Promise<HighlightRecord> {
+  const db = await getDB()
+  const record: HighlightRecord = {
+    id: crypto.randomUUID(),
+    bookId,
+    start,
+    end,
+    text,
+    ...(note ? { note } : {}),
+    createdAt: Date.now(),
+  }
+  await db.put('highlights', record)
+  return record
+}
+
+/** 某本书的全部划线，按位置升序。 */
+export async function listHighlights(bookId: string): Promise<HighlightRecord[]> {
+  const db = await getDB()
+  const list = await db.getAllFromIndex('highlights', 'by-book', bookId)
+  return list.sort((a, b) => a.start - b.start)
+}
+
+export async function deleteHighlight(id: string): Promise<void> {
+  const db = await getDB()
+  await db.delete('highlights', id)
+}
+
 // ---------- 阅读统计（V2.0） ----------
 
 function todayKey(now = new Date()): string {
@@ -273,6 +328,7 @@ export interface BackupData {
   progress: ProgressRecord[]
   bookmarks: BookmarkRecord[]
   stats: DayStatRecord[]
+  highlights: HighlightRecord[]
   settings: unknown | null
 }
 
@@ -287,6 +343,7 @@ export async function exportBackup(settings: unknown): Promise<BackupData> {
     progress: await db.getAll('progress'),
     bookmarks: await db.getAll('bookmarks'),
     stats: await db.getAll('stats'),
+    highlights: await db.getAll('highlights'),
     settings,
   }
 }
@@ -296,6 +353,7 @@ export interface ImportReport {
   progress: number
   bookmarks: number
   stats: number
+  highlights: number
 }
 
 /** 导入备份（按 id 覆盖合并），返回各类记录的导入数量。 */
@@ -304,7 +362,7 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
     throw new Error('不是有效的 xifeng 阅读备份文件')
   }
   const db = await getDB()
-  const tx = db.transaction(['books', 'progress', 'bookmarks', 'stats'], 'readwrite')
+  const tx = db.transaction(['books', 'progress', 'bookmarks', 'stats', 'highlights'], 'readwrite')
   for (const b of data.books ?? []) await tx.objectStore('books').put(b)
   for (const p of data.progress ?? []) await tx.objectStore('progress').put(p)
   for (const b of data.bookmarks ?? []) {
@@ -313,12 +371,16 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
   for (const s of data.stats ?? []) {
     if (s && s.day) await tx.objectStore('stats').put(s)
   }
+  for (const h of data.highlights ?? []) {
+    if (h && h.id && h.bookId != null) await tx.objectStore('highlights').put(h)
+  }
   await tx.done
   return {
     books: data.books?.length ?? 0,
     progress: data.progress?.length ?? 0,
     bookmarks: data.bookmarks?.length ?? 0,
     stats: data.stats?.length ?? 0,
+    highlights: data.highlights?.length ?? 0,
   }
 }
 

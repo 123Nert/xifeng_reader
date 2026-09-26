@@ -15,6 +15,7 @@
   --danger: #b5563e;
   --shadow: 0 10px 30px rgba(60, 55, 40, 0.1);
   --mark-bg: #f2dd8a;
+  --hl-bg: #cfe8db;
 
   /* 正文排版变量：由 JS 动态写回（字号/行距设置），分页测量与渲染共用 */
   --content-font-size: 18px;
@@ -35,6 +36,7 @@
   --accent: #8a6a3f;
   --accent-soft: #ecdfc0;
   --mark-bg: #e8cf7a;
+  --hl-bg: #d8e4c8;
   --shadow: 0 10px 30px rgba(90, 70, 40, 0.12);
 }
 
@@ -49,6 +51,7 @@
   --accent: #4f9d7c;
   --accent-soft: #24342b;
   --mark-bg: #55551f;
+  --hl-bg: #2f4a3c;
   --danger: #c26a52;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
@@ -937,13 +940,35 @@ button {
   color: #fff;
 }
 
-/* 搜索命中高亮 */
+/* 搜索命中（hit）与划线（hl）高亮 */
 .page-content mark,
-.menu-body mark {
+.menu-body mark,
+.scroll-flow mark {
   background: var(--mark-bg);
   color: inherit;
   padding: 0 1px;
   border-radius: 2px;
+}
+
+.page-content mark.hl,
+.scroll-flow mark.hl,
+.menu-body mark.hl {
+  background: var(--hl-bg);
+}
+
+.sel-hl-btn {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  z-index: 45;
+  box-shadow: var(--shadow);
 }
 
 /* ========== Toast ========== */
