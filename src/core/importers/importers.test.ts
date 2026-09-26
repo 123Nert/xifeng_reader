@@ -274,10 +274,13 @@ describe('detectFormat / 不支持格式', () => {
     expect(detectFormat('a.txt', empty)).toBe('txt')
   })
 
-  it('PDF 与 MOBI 给出明确的"暂不支持"', async () => {
-    const pdf = new TextEncoder().encode('%PDF-1.7 ...')
-    await expect(importBook('x.pdf', pdf.buffer as ArrayBuffer)).rejects.toThrow(ImportError)
-    await expect(importBook('x.pdf', pdf.buffer as ArrayBuffer)).rejects.toThrow('暂不支持 PDF')
+  it('PDF 走独立通道（V6.0），损坏文件抛 ImportError；MOBI 仍明确不支持', async () => {
+    // V6.0：PDF 不再被 assertSupported 拦截，而是进入 importPdf 的解析分支；
+    // 损坏文件在 pdf.js 内抛 InvalidPDFException，由 importPdf 归一为 ImportError。
+    const pdf = new TextEncoder().encode('%PDF-1.7 corrupted body')
+    const err = await importBook('x.pdf', pdf.buffer as ArrayBuffer).catch((e) => e)
+    expect(err).toBeInstanceOf(ImportError)
+    expect(err.message).toBe('PDF 解析失败')
 
     const mobi = new Uint8Array([0x42, 0x4f, 0x4f, 0x4b, 0, 0])
     await expect(importBook('x.mobi', mobi.buffer as ArrayBuffer)).rejects.toThrow('MOBI')

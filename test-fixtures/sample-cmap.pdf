@@ -1,0 +1,51 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [9 0 R] /Count 1 >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type0 /BaseFont /FakeGB /Encoding /GBK-EUC-H /DescendantFonts [7 0 R] >>
+endobj
+6 0 obj
+<< /Type /FontDescriptor /FontName /FakeGB /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>
+endobj
+7 0 obj
+<< /Type /Font /Subtype /CIDFontType0 /BaseFont /FakeGB /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor 6 0 R /DW 1000 >>
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 48 >>
+stream
+BT
+/F1 14 Tf
+50 800 Td
+<C4E3BAC3D6D0CEC4> Tj
+ET
+endstream
+endobj
+xref
+0 15
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000000 65535 f 
+0000000000 65535 f 
+0000000115 00000 n 
+0000000228 00000 n 
+0000000390 00000 n 
+0000000000 65535 f 
+0000000564 00000 n 
+0000000691 00000 n 
+0000000000 65535 f 
+0000000000 65535 f 
+0000000000 65535 f 
+0000000000 65535 f 
+trailer
+<< /Size 15 /Root 1 0 R >>
+startxref
+789
+%%EOF

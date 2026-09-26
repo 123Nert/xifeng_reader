@@ -333,7 +333,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,.epub,.md,.markdown,.html,.htm,.xhtml,text/plain,application/epub+zip,text/markdown,text/html"
+          accept=".txt,.epub,.md,.markdown,.html,.htm,.xhtml,.pdf,text/plain,application/epub+zip,text/markdown,text/html,application/pdf"
           multiple
           hidden
           onChange={(e) => {

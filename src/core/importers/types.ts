@@ -2,7 +2,7 @@
  * types.ts — 统一导入管线的类型（V5.0）。
  */
 
-export const BOOK_FORMATS = ['txt', 'epub', 'md', 'html'] as const
+export const BOOK_FORMATS = ['txt', 'epub', 'md', 'html', 'pdf'] as const
 export type BookFormat = (typeof BOOK_FORMATS)[number]
 
 export const FORMAT_LABELS: Record<BookFormat, string> = {
@@ -10,6 +10,7 @@ export const FORMAT_LABELS: Record<BookFormat, string> = {
   epub: 'EPUB',
   md: 'MD',
   html: 'HTML',
+  pdf: 'PDF',
 }
 
 export interface TocEntryLite {

@@ -3,3 +3,5 @@ dist/
 *.local
 .DS_Store
 xifeng-backup-*.json
+# pdf.js 静态资源由 scripts/sync-pdfjs-assets.mjs 在 predev/prebuild/pretest 时铺到此处
+public/pdfjs/

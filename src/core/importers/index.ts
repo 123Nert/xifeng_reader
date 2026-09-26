@@ -1,7 +1,7 @@
 /**
- * index.ts — 统一导入入口（V5.0）。
+ * index.ts — 统一导入入口（V5.0 / V6.0）。
  *
- * 探测顺序：魔数（ZIP→EPUB / %PDF→明确不支持）→ 扩展名 → 内容特征（HTML）→ TXT 兜底。
+ * 探测顺序：魔数（ZIP→EPUB / %PDF→PDF）→ 扩展名 → 内容特征（HTML）→ TXT 兜底。
  * 所有失败都以 ImportError 抛出，带中文原因与下一步建议。
  */
 import { decodeText } from '../encoding'
@@ -33,7 +33,9 @@ function extOf(fileName: string): string {
 export function detectFormat(fileName: string, bytes: Uint8Array): BookFormat {
   const ext = extOf(fileName)
   if (startsWith(bytes, ZIP_MAGIC) || startsWith(bytes, ZIP_MAGIC_EMPTY)) return 'epub'
+  if (startsWith(bytes, PDF_MAGIC)) return 'pdf'
   if (ext === 'epub') return 'epub'
+  if (ext === 'pdf') return 'pdf'
   if (ext === 'md' || ext === 'markdown') return 'md'
   if (ext === 'html' || ext === 'htm' || ext === 'xhtml') return 'html'
   return 'txt'
@@ -42,12 +44,6 @@ export function detectFormat(fileName: string, bytes: Uint8Array): BookFormat {
 /** 对明确不支持的格式给出针对性提示。 */
 function assertSupported(fileName: string, bytes: Uint8Array): void {
   const ext = extOf(fileName)
-  if (startsWith(bytes, PDF_MAGIC) || ext === 'pdf') {
-    throw new ImportError(
-      '暂不支持 PDF',
-      'PDF 的文本抽取依赖复杂排版解析，本阅读器坚持零依赖实现；建议先用工具转成 EPUB 或 TXT',
-    )
-  }
   if (startsWith(bytes, MOBI_MAGIC) || ext === 'mobi' || ext === 'azw' || ext === 'azw3') {
     throw new ImportError(
       '暂不支持 MOBI / AZW3',
@@ -75,6 +71,12 @@ export async function importBook(
 
   if (format === 'epub') {
     return await importEpub(buffer, fallbackTitle, onProgress)
+  }
+
+  if (format === 'pdf') {
+    // 动态引入：pdf.js 只在真的导入 PDF 时才进入加载链（见 pdf.ts 头注释）
+    const { importPdf } = await import('./pdf')
+    return await importPdf(buffer, fallbackTitle, onProgress)
   }
 
   if (format === 'html') {
