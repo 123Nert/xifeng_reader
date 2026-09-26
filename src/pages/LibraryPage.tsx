@@ -3,8 +3,8 @@
  * 导入流程：读 ArrayBuffer → 编码探测解码 → 入库 → 刷新列表。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { decodeText } from '../core/encoding'
 import { purifyText } from '../core/purify'
+import { importBook, ImportError, FORMAT_LABELS } from '../core/importers'
 import {
   addBook,
   deleteBook,
@@ -68,6 +68,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
   const [importing, setImporting] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [progressText, setProgressText] = useState('')
   const [charsetChoice, setCharsetChoice] = useState('auto')
   const [purifyOn, setPurifyOn] = useState(true)
   const [stats, setStats] = useState<ReadingStats | null>(null)
@@ -94,45 +95,97 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
     void refresh()
   }, [refresh])
 
-  const importFile = useCallback(
-    async (file: File) => {
-      if (!/\.txt$/i.test(file.name)) {
-        showToast('目前仅支持导入 TXT 文件')
-        return
-      }
-      setImporting(true)
+  /** 导入单个文件（V5.0：多格式 + 净化 + 元信息）。返回给批量导入的成功标记。 */
+  const importOneFile = useCallback(
+    async (file: File): Promise<{ ok: boolean; title?: string; detail?: string }> => {
       try {
         const buffer = await file.arrayBuffer()
-        const { text: decoded, charset } = decodeText(buffer, { charset: charsetChoice })
-        // 导入时净化推广行（V1.3）：原始文件仍在用户手中，可关掉开关重新导入
-        let content = decoded
+        const result = await importBook(file.name, buffer, (info) => {
+          setProgressText(
+            info.total ? `${info.phase} ${info.current}/${info.total}` : info.phase,
+          )
+        })
+
+        // 净化推广行（V1.3；对 EPUB 等的正文同样适用）
+        let content = result.text
         let removed = 0
         if (purifyOn) {
-          const report = purifyText(decoded)
+          const report = purifyText(content)
           content = report.text
           removed = report.removed
         }
-        const title = file.name.replace(/\.txt$/i, '')
+
         await addBook({
           id: crypto.randomUUID(),
-          title,
+          title: result.title,
           content,
           size: file.size,
-          charset,
+          charset: result.charset ?? result.format.toUpperCase(),
           importedAt: Date.now(),
+          format: result.format,
+          cover: result.cover,
+          tocEntries: result.tocEntries,
+          author: result.author,
+          language: result.language,
         })
-        await refresh()
-        showToast(
-          `已导入《${title}》· ${charset.toUpperCase()}${removed > 0 ? ` · 净化 ${removed} 行` : ''}`,
-        )
+
+        const bits = [FORMAT_LABELS[result.format]]
+        if (result.charset && result.format === 'txt') bits.push(result.charset.toUpperCase())
+        if (removed > 0) bits.push(`净化 ${removed} 行`)
+        if (result.tocEntries) bits.push(`${result.tocEntries.length} 章`)
+        if (result.warnings.length > 0) bits.push(`${result.warnings.length} 处警告`)
+        return { ok: true, title: result.title, detail: bits.join(' · ') }
       } catch (err) {
+        const msg =
+          err instanceof ImportError
+            ? `${err.message}${err.hint ? `——${err.hint}` : ''}`
+            : '导入失败，请重试'
         console.error(err)
-        showToast('导入失败，请重试')
-      } finally {
-        setImporting(false)
+        return { ok: false, title: file.name, detail: msg }
       }
     },
-    [refresh, showToast, charsetChoice, purifyOn],
+    [purifyOn],
+  )
+
+  /** 批量导入：逐个处理，单个失败不影响其余（V5.0-a）。 */
+  const importFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+      setImporting(true)
+      let okCount = 0
+      let lastDetail = ''
+      const failures: string[] = []
+      try {
+        for (let i = 0; i < files.length; i++) {
+          setProgressText(
+            files.length > 1 ? `导入中 ${i + 1}/${files.length}：${files[i].name}` : '正在导入…',
+          )
+          const r = await importOneFile(files[i])
+          if (r.ok) {
+            okCount++
+            lastDetail = r.detail ?? ''
+          } else {
+            failures.push(`《${r.title}》：${r.detail}`)
+          }
+        }
+        await refresh()
+        if (files.length === 1 && failures.length === 0) {
+          showToast(`已导入${lastDetail ? ' · ' + lastDetail : ''}`)
+        } else if (failures.length === 0) {
+          showToast(`已导入 ${okCount} 本书`)
+        } else {
+          showToast(
+            okCount > 0
+              ? `成功 ${okCount} 本，失败 ${failures.length} 本：${failures[0]}`
+              : failures[0],
+          )
+        }
+      } finally {
+        setImporting(false)
+        setProgressText('')
+      }
+    },
+    [importOneFile, refresh, showToast],
   )
 
   const removeBook = useCallback(
@@ -238,14 +291,14 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
       onDrop={(e) => {
         e.preventDefault()
         setDragOver(false)
-        const file = e.dataTransfer.files[0]
-        if (file) void importFile(file)
+        const files = [...e.dataTransfer.files]
+        if (files.length > 0) void importFiles(files)
       }}
     >
       <header className="lib-header">
         <div className="lib-heading">
           <h1>xifeng 阅读</h1>
-          <p className="sub">本地 TXT 阅读器 · 导入即读，下次接着读</p>
+          <p className="sub">本地阅读器 · 支持 TXT / EPUB / MD / HTML · 导入即读，下次接着读</p>
         </div>
         <div className="import-options">
           <label className="import-check">
@@ -270,20 +323,22 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
           </select>
           <button
             className="btn primary"
+            title="支持 TXT / EPUB / Markdown / HTML，可多选"
             onClick={() => fileInputRef.current?.click()}
             disabled={importing}
           >
-            {importing ? '导入中…' : '＋ 导入 TXT'}
+            {importing ? '导入中…' : '＋ 导入书籍'}
           </button>
         </div>
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,text/plain"
+          accept=".txt,.epub,.md,.markdown,.html,.htm,.xhtml,text/plain,application/epub+zip,text/markdown,text/html"
+          multiple
           hidden
           onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) void importFile(file)
+            const files = [...(e.target.files ?? [])]
+            if (files.length > 0) void importFiles(files)
             e.target.value = ''
           }}
         />
@@ -341,6 +396,13 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
         />
       </div>
 
+      {importing && progressText && (
+        <div className="import-progress">
+          <span className="import-spinner" />
+          {progressText}
+        </div>
+      )}
+
       {manage && list.length > 0 && (
         <div className="manage-bar">
           <span>已选 {selected.size} 本</span>
@@ -379,8 +441,15 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
                 )}
                 <div
                   className="book-cover"
-                  style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}
+                  style={
+                    entry.cover
+                      ? { backgroundImage: `url(${entry.cover})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                      : { background: `linear-gradient(135deg, ${c1}, ${c2})` }
+                  }
                 >
+                  {entry.format && entry.format !== 'txt' && (
+                    <span className="cover-format">{FORMAT_LABELS[entry.format]}</span>
+                  )}
                   <span className="cover-title">{entry.title}</span>
                 </div>
                 <div className="book-meta">
@@ -388,6 +457,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
                     {entry.title}
                   </div>
                   <div className="book-sub">
+                    {entry.author ? `${entry.author} · ` : ''}
                     {entry.charIndex > 0 ? `已读 ${percent}% · ` : '未读 · '}
                     {entry.lastReadAt ? formatLastRead(entry.lastReadAt) : '刚导入'}
                   </div>
@@ -435,11 +505,11 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
         <div className="empty">
           <div className="empty-icon">📖</div>
           <p className="empty-title">书架还是空的</p>
-          <p className="sub">点击右上角「导入 TXT」，或把文件拖到这里</p>
+          <p className="sub">点击右上角「导入书籍」，或把文件拖到这里（TXT / EPUB / MD / HTML）</p>
         </div>
       )}
 
-      {dragOver && <div className="drop-hint">松开以导入 TXT 文件</div>}
+      {dragOver && <div className="drop-hint">松开以导入书籍（TXT / EPUB / MD / HTML）</div>}
       {toast && <div className="toast">{toast}</div>}
     </section>
   )

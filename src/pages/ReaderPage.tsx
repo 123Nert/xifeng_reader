@@ -128,6 +128,7 @@ function createDomMeasurer(
 
 export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack: () => void }) {
   const [title, setTitle] = useState('')
+  const [author, setAuthor] = useState<string | null>(null)
   const [totalChars, setTotalChars] = useState(0)
   const [page, setPage] = useState({ start: 0, end: 0 })
   const [chromeVisible, setChromeVisible] = useState(true)
@@ -169,9 +170,16 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     toastTimer.current = window.setTimeout(() => setToast(null), 1600)
   }, [])
 
-  /** 重置滚动窗口：锚点页回到窗口头部（滚动模式换页/跳转时调用）。 */
-  const resetScrollWindow = useCallback(() => {
+  /**
+   * 重置滚动窗口：锚点页回到窗口头部（滚动模式换页/跳转时调用）。
+   * 必须同步 viewStart，否则顶栏章节名与进度条会沿用跳转前的旧位置。
+   */
+  const resetScrollWindow = useCallback((newStart?: number) => {
     setExtraCount(0)
+    if (newStart != null) {
+      setViewStart(newStart)
+      viewStartRef.current = newStart
+    }
     if (viewportRef.current) viewportRef.current.scrollTop = 0
   }, [])
 
@@ -200,10 +208,16 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       pagemapRef.current = pm
       measurerRef.current = measurer
       setTitle(book.title)
+      setAuthor(book.author ?? null)
       setTotalChars(pm.totalChars)
       setPage({ ...pm.current })
       setViewStart(pm.current.start)
-      setToc(buildToc(book.content, book.tocPattern))
+      // V5.0：优先使用导入时解析的真实目录（EPUB/MD/HTML），否则回退正则切分
+      setToc(
+        book.tocEntries && book.tocEntries.length > 0
+          ? { entries: book.tocEntries, source: 'builtin' }
+          : buildToc(book.content, book.tocPattern),
+      )
       setPatternDraft(book.tocPattern ?? '')
       setBookmarks(await listBookmarks(bookId))
       // 批注：加载后做三层锚定校验，正文变更（如重新净化导入）时自动修复位置
@@ -245,7 +259,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         return
       }
       setPage({ ...pm.current })
-      if (settings.pageMode === 'scroll') resetScrollWindow()
+      if (settings.pageMode === 'scroll') resetScrollWindow(pm.current.start)
       void saveProgress(bookId, pm.current.start)
     },
     [bookId, showToast, settings.pageMode, resetScrollWindow],
@@ -259,7 +273,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       const target = Math.round(fraction * (pm.totalChars - 1))
       pm.jumpTo(target)
       setPage({ ...pm.current })
-      if (settings.pageMode === 'scroll') resetScrollWindow()
+      if (settings.pageMode === 'scroll') resetScrollWindow(pm.current.start)
       void saveProgress(bookId, pm.current.start)
     },
     [bookId, settings.pageMode, resetScrollWindow],
@@ -601,7 +615,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setAutoPlaying(false)
       pm.jumpTo(charIndex)
       setPage({ ...pm.current })
-      if (settings.pageMode === 'scroll') resetScrollWindow()
+      // 滚动模式下必须同步 viewStart，否则顶栏章节名/进度仍是跳转前的位置
+      if (settings.pageMode === 'scroll') resetScrollWindow(pm.current.start)
       void saveProgress(bookId, pm.current.start)
       setMenuOpen(false)
     },
@@ -696,7 +711,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       }
       pm.goNext()
       setPage({ ...pm.current })
-      if (settings.pageMode === 'scroll') resetScrollWindow()
+      if (settings.pageMode === 'scroll') resetScrollWindow(pm.current.start)
       void saveProgress(bookId, pm.current.start)
     }, settings.autoPageSeconds * 1000)
     return () => window.clearInterval(timer)
@@ -894,7 +909,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         </button>
         <div className="reader-title">
           <span className="reader-book">{title}</span>
-          {chapterTitle && <span className="reader-chapter">{chapterTitle}</span>}
+          <span className="reader-chapter">{chapterTitle ?? author ?? ''}</span>
         </div>
         <div className="top-spacer" />
       </header>

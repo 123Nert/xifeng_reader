@@ -10,6 +10,7 @@
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import type { BookFormat } from './importers/types'
 import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_MARK_STYLE,
@@ -30,6 +31,15 @@ export interface BookRecord {
   importedAt: number
   /** V1.1：用户自定义章节正则（可选，空值走内置模式） */
   tocPattern?: string
+  /** V5.0：来源格式（缺省视作 txt，老记录天然兼容） */
+  format?: BookFormat
+  /** V5.0：封面 data URL（EPUB 提取） */
+  cover?: string
+  /** V5.0：导入时解析的真实目录（优先于正则切分） */
+  tocEntries?: Array<{ title: string; charIndex: number }>
+  /** V5.0：作者 / 语言（EPUB 元信息） */
+  author?: string
+  language?: string
 }
 
 export interface ProgressRecord {
@@ -68,6 +78,10 @@ export interface LibraryEntry {
   charCount: number
   charIndex: number
   lastReadAt: number | null
+  /** V5.0 */
+  format?: BookFormat
+  cover?: string
+  author?: string
 }
 
 interface XifengDB extends DBSchema {
@@ -149,6 +163,9 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
       charCount: b.content.length,
       charIndex: 0,
       lastReadAt: null,
+      format: b.format,
+      cover: b.cover,
+      author: b.author,
     })
     cursor = await cursor.continue()
   }
