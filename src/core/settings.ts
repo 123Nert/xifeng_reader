@@ -24,6 +24,8 @@ export interface ReaderSettings {
   fontFamily: FontFamilyName
   /** 自定义字体族名（字体文件仅本会话内加载） */
   customFontName?: string
+  /** 自动翻页间隔（秒） */
+  autoPageSeconds: number
 }
 
 export const FONT_MIN = 14
@@ -89,6 +91,11 @@ export const FONT_FAMILY_STACKS: Record<FontFamilyName, string> = {
   custom: "var(--custom-font-family), 'Songti SC', 'Noto Serif CJK SC', serif",
 }
 
+// ---------- V2.0 自动翻页 ----------
+
+export const AUTO_PAGE_SECONDS = [5, 10, 15, 30] as const
+export const AUTO_PAGE_DEFAULT: number = 10
+
 const STORAGE_KEY = 'xifeng.settings'
 
 export function clampFontSize(size: number): number {
@@ -112,6 +119,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
     indent: false,
     align: 'start',
     fontFamily: FONT_FAMILY_DEFAULT,
+    autoPageSeconds: AUTO_PAGE_DEFAULT,
   }
   try {
     const raw = storage.getItem(STORAGE_KEY)
@@ -140,6 +148,11 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
           ? (p.fontFamily as FontFamilyName)
           : fallback.fontFamily,
         customFontName: typeof p.customFontName === 'string' ? p.customFontName : undefined,
+        autoPageSeconds: AUTO_PAGE_SECONDS.includes(
+          p.autoPageSeconds as (typeof AUTO_PAGE_SECONDS)[number],
+        )
+          ? (p.autoPageSeconds as number)
+          : fallback.autoPageSeconds,
       }
     }
   } catch {

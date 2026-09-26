@@ -39,6 +39,12 @@ export interface BookmarkRecord {
   createdAt: number
 }
 
+/** V2.0 每日阅读统计（分钟），keyPath 为日期字符串。 */
+export interface DayStatRecord {
+  day: string
+  minutes: number
+}
+
 /** 书库列表项：书籍元信息 + 合并后的阅读进度，不含正文。 */
 export interface LibraryEntry {
   id: string
@@ -59,10 +65,11 @@ interface XifengDB extends DBSchema {
     value: BookmarkRecord
     indexes: { 'by-book': string }
   }
+  stats: { key: string; value: DayStatRecord }
 }
 
 const DB_NAME = 'xifeng-reader'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 let dbPromise: Promise<IDBPDatabase<XifengDB>> | null = null
 
@@ -77,6 +84,9 @@ function getDB(): Promise<IDBPDatabase<XifengDB>> {
         if (oldVersion < 2) {
           const store = db.createObjectStore('bookmarks', { keyPath: 'id' })
           store.createIndex('by-book', 'bookId')
+        }
+        if (oldVersion < 3) {
+          db.createObjectStore('stats', { keyPath: 'day' })
         }
       },
     })
@@ -192,6 +202,124 @@ export async function listBookmarks(bookId: string): Promise<BookmarkRecord[]> {
 export async function deleteBookmark(id: string): Promise<void> {
   const db = await getDB()
   await db.delete('bookmarks', id)
+}
+
+// ---------- 阅读统计（V2.0） ----------
+
+function todayKey(now = new Date()): string {
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${m}-${d}`
+}
+
+/** 把本次会话累计的阅读分钟数并入今天的统计（页面可见时才计，后台挂机不计）。 */
+export async function addReadingMinutes(minutes: number): Promise<void> {
+  if (!(minutes > 0)) return
+  const db = await getDB()
+  const day = todayKey()
+  const record = (await db.get('stats', day)) ?? { day, minutes: 0 }
+  record.minutes = Math.round((record.minutes + minutes) * 10) / 10
+  await db.put('stats', record)
+}
+
+export interface ReadingStats {
+  todayMinutes: number
+  weekMinutes: number
+  totalMinutes: number
+}
+
+/** 今日 / 近 7 天 / 累计阅读分钟数。 */
+export async function getReadingStats(now = new Date()): Promise<ReadingStats> {
+  const db = await getDB()
+  const all = await db.getAll('stats')
+  const byDay = new Map(all.map((r) => [r.day, r.minutes]))
+  const dayKeys = new Set(all.map((r) => r.day))
+  const today = todayKey(now)
+  let week = 0
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const key = todayKey(d)
+    if (dayKeys.has(key)) week += byDay.get(key) ?? 0
+  }
+  const total = all.reduce((sum, r) => sum + r.minutes, 0)
+  return {
+    todayMinutes: byDay.get(today) ?? 0,
+    weekMinutes: Math.round(week * 10) / 10,
+    totalMinutes: Math.round(total * 10) / 10,
+  }
+}
+
+// ---------- 书库管理（V2.0） ----------
+
+/** 重命名书籍。 */
+export async function renameBook(id: string, title: string): Promise<void> {
+  const db = await getDB()
+  const book = await db.get('books', id)
+  if (!book) return
+  const trimmed = title.trim()
+  if (!trimmed) return
+  book.title = trimmed
+  await db.put('books', book)
+}
+
+// ---------- 备份与恢复（V2.0） ----------
+
+export interface BackupData {
+  app: 'xifeng-reader'
+  version: 1
+  exportedAt: number
+  books: BookRecord[]
+  progress: ProgressRecord[]
+  bookmarks: BookmarkRecord[]
+  stats: DayStatRecord[]
+  settings: unknown | null
+}
+
+/** 导出全量备份（含正文）。 */
+export async function exportBackup(settings: unknown): Promise<BackupData> {
+  const db = await getDB()
+  return {
+    app: 'xifeng-reader',
+    version: 1,
+    exportedAt: Date.now(),
+    books: await db.getAll('books'),
+    progress: await db.getAll('progress'),
+    bookmarks: await db.getAll('bookmarks'),
+    stats: await db.getAll('stats'),
+    settings,
+  }
+}
+
+export interface ImportReport {
+  books: number
+  progress: number
+  bookmarks: number
+  stats: number
+}
+
+/** 导入备份（按 id 覆盖合并），返回各类记录的导入数量。 */
+export async function importBackup(data: BackupData): Promise<ImportReport> {
+  if (!data || data.app !== 'xifeng-reader' || !Array.isArray(data.books)) {
+    throw new Error('不是有效的 xifeng 阅读备份文件')
+  }
+  const db = await getDB()
+  const tx = db.transaction(['books', 'progress', 'bookmarks', 'stats'], 'readwrite')
+  for (const b of data.books ?? []) await tx.objectStore('books').put(b)
+  for (const p of data.progress ?? []) await tx.objectStore('progress').put(p)
+  for (const b of data.bookmarks ?? []) {
+    if (b && b.id && b.bookId != null) await tx.objectStore('bookmarks').put(b)
+  }
+  for (const s of data.stats ?? []) {
+    if (s && s.day) await tx.objectStore('stats').put(s)
+  }
+  await tx.done
+  return {
+    books: data.books?.length ?? 0,
+    progress: data.progress?.length ?? 0,
+    bookmarks: data.bookmarks?.length ?? 0,
+    stats: data.stats?.length ?? 0,
+  }
 }
 
 /** 返回已保存的阅读位置（字符偏移）；没有记录时返回 null。 */

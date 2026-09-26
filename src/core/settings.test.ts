@@ -41,6 +41,7 @@ const DEFAULTS: ReaderSettings = {
   indent: false,
   align: 'start',
   fontFamily: 'serif',
+  autoPageSeconds: 10,
 }
 
 describe('settings: 读写', () => {
@@ -59,6 +60,7 @@ describe('settings: 读写', () => {
       align: 'justify',
       fontFamily: 'kai',
       customFontName: 'MyFont',
+      autoPageSeconds: 5,
     }
     const storage = makeStorage()
     saveSettings(s, storage)

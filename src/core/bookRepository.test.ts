@@ -128,3 +128,69 @@ describe('bookRepository: 书签（V1.2）', () => {
     expect(await repo.listBookmarks('b4')).toHaveLength(2)
   })
 })
+
+describe('bookRepository: 阅读统计（V2.0）', () => {
+  it('分钟数累加进当天，并汇总今日/本周/累计', async () => {
+    await repo.addReadingMinutes(0.5)
+    await repo.addReadingMinutes(0.5)
+    await repo.addReadingMinutes(0)
+    const stats = await repo.getReadingStats()
+    expect(stats.todayMinutes).toBe(1)
+    expect(stats.weekMinutes).toBe(1)
+    expect(stats.totalMinutes).toBe(1)
+  })
+
+  it('非正数分钟忽略', async () => {
+    await repo.addReadingMinutes(-1)
+    const stats = await repo.getReadingStats()
+    expect(stats.totalMinutes).toBe(0)
+  })
+})
+
+describe('bookRepository: 重命名（V2.0）', () => {
+  it('重命名后列表展示新书名', async () => {
+    await repo.addBook(book('rn', '旧书名'))
+    await repo.renameBook('rn', '  新书名 ')
+    const list = await repo.listLibrary()
+    expect(list[0].title).toBe('新书名')
+  })
+
+  it('空书名与不存在的书不产生变化', async () => {
+    await repo.addBook(book('keep', '原名'))
+    await repo.renameBook('keep', '   ')
+    await repo.renameBook('ghost', '任意')
+    expect((await repo.listLibrary())[0].title).toBe('书keep')
+  })
+})
+
+describe('bookRepository: 备份与恢复（V2.0）', () => {
+  it('导出→清空→导入 后数据完好', async () => {
+    await repo.addBook(book('bk', '正文体'))
+    await repo.saveProgress('bk', 42)
+    await repo.addBookmark('bk', 30, '摘录甲')
+    await repo.addReadingMinutes(1.5)
+
+    const backup = await repo.exportBackup({ fontSize: 20 })
+    expect(backup.app).toBe('xifeng-reader')
+    expect(backup.books).toHaveLength(1)
+    expect(backup.settings).toEqual({ fontSize: 20 })
+
+    // 模拟"清库后导入"：全新模块实例 + 全新数据库
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+
+    const report = await repo.importBackup(backup)
+    expect(report.books).toBe(1)
+    expect(await repo.getBookContent('bk')).toBe('正文体')
+    expect(await repo.getProgress('bk')).toBe(42)
+    expect(await repo.listBookmarks('bk')).toHaveLength(1)
+    expect((await repo.getReadingStats()).totalMinutes).toBe(1.5)
+  })
+
+  it('非法备份文件抛出可读错误', async () => {
+    await expect(repo.importBackup({ app: 'other' } as never)).rejects.toThrow(
+      '不是有效的 xifeng 阅读备份文件',
+    )
+  })
+})
