@@ -4,13 +4,16 @@
 
 产品设计见 [docs/产品设计文档.md](docs/产品设计文档.md)，技术方案见 [docs/技术方案.md](docs/技术方案.md)。
 
-## 功能（MVP）
+## 功能
 
-- 导入本地 TXT（文件选择 / 拖拽），自动识别 UTF-8 / GB18030（含 GBK）/ UTF-16 编码，杜绝中文乱码
-- 书库：书名、阅读进度、最后阅读时间，支持删除
-- 阅读页：按视口与字体设置实时分页；按钮 / 键盘（←→、PageUp/PageDown、空格）/ 点按区域翻页
-- 字号、行距即时调整，重排后阅读位置不丢
-- 进度自动保存，重新打开精确续读；底部进度条拖动可跳转任意位置
+- 导入本地 TXT（文件选择 / 拖拽），自动识别 UTF-8 / GB18030（含 GBK）/ Big5 / UTF-16，可手动指定编码
+- 书库：书名、阅读进度、最后阅读时间、搜索/排序/重命名/批量删除、阅读时长统计（今日/本周/累计）
+- 阅读页：分页 / 连续滚动两种模式；按钮 / 键盘 / 点按区域翻页；自动翻页；TTS 朗读（读完自动翻页）
+- 排版：字号、行距、段距、页边距、首行缩进、两端对齐、字体预设与自定义字体
+- 主题：日间 / 护眼 / 夜间
+- 导航：章节目录（内置 + 自定义正则）、书签、全文搜索（页面内高亮）、划线笔记（可导出 Markdown）
+- 进度自动保存，重新打开精确续读；进度条拖动跳转任意位置
+- PWA 可安装，离线可读；备份导出 / 导入（全量 JSON）
 
 ## 运行
 
@@ -30,16 +33,20 @@ npm run preview    # 本地预览构建产物
 
 ```
 src/
-├─ main.tsx / App.tsx        # 入口；书库 / 阅读两视图切换
+├─ main.tsx / App.tsx        # 入口；书库 / 阅读两视图切换；PWA 注册
 ├─ pages/
-│  ├─ LibraryPage.tsx        # 书库：导入、列表、删除
-│  └─ ReaderPage.tsx         # 阅读页：分页渲染、翻页、进度条
+│  ├─ LibraryPage.tsx        # 书库：导入、列表、管理、备份、统计
+│  ├─ ReaderPage.tsx         # 阅读页：分页/滚动渲染、翻页、划线、TTS
+│  └─ ReaderMenu.tsx         # 阅读菜单：目录/书签/笔记/搜索/设置
 ├─ core/                     # 纯逻辑层，框架无关、可单测
-│  ├─ encoding.ts            # 编码探测与解码
+│  ├─ encoding.ts            # 编码探测与解码（支持强制指定）
 │  ├─ pagination.ts          # Measurer 接口 + PageMap 分页引擎
-│  ├─ bookRepository.ts      # IndexedDB 读写（books / progress 双 store）
+│  ├─ toc.ts                 # 章节切分（内置 + 自定义正则）
+│  ├─ search.ts              # 全文搜索
+│  ├─ purify.ts              # 导入净化（推广行清理）
+│  ├─ bookRepository.ts      # IndexedDB 读写（books/progress/bookmarks/stats/highlights）
 │  └─ settings.ts            # 阅读设置（localStorage + CSS 变量）
-└─ styles/theme.css          # CSS 变量主题（为深色主题预留）
+└─ styles/theme.css          # CSS 变量主题（日间/护眼/夜间）
 ```
 
 `demo/` 是早期原生 JS 原型归档，仅供对照，不参与构建。

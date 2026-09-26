@@ -598,12 +598,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const lastRenderedEnd = extraPages.length ? extraPages[extraPages.length - 1].end : page.end
   const canExtend = lastRenderedEnd < totalChars
 
-  // 视口未被填满时自动追加页（末页之后停止，避免死循环）
+  // 视口接近底部（或未被填满）时自动追加页（末页之后停止，避免死循环）
   useEffect(() => {
     if (!isScroll || !ready || !canExtend) return
     const el = viewportRef.current
     if (!el) return
-    if (el.scrollHeight <= el.clientHeight + 4) setExtraCount((c) => c + 2)
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) setExtraCount((c) => c + 2)
   }, [isScroll, ready, canExtend, extraPages, page.end])
 
   /** 滚动驱动：跟踪视口顶部所在页（进度/章节），触底时扩展窗口。 */
@@ -709,9 +709,10 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         className={`page-viewport${isScroll ? ' scroll-mode' : ''}`}
         onMouseUp={handleMouseUp}
         onMouseDown={() => setSelBtn(null)}
+        onScroll={isScroll ? handleScrollFlow : undefined}
       >
         {isScroll ? (
-          <div className="scroll-flow" onScroll={handleScrollFlow}>
+          <div className="scroll-flow">
             {totalChars === 0 ? (
               <div className="menu-empty">（这本书没有正文内容）</div>
             ) : (
