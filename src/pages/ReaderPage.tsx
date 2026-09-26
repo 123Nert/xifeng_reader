@@ -469,6 +469,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         setSelInfo(null)
         return
       }
+      // 点在标记内部（含搜索高亮）不应触发翻页
+      if ((e.target as HTMLElement).closest('mark')) return
       setEditState(null)
       handleMouseUp()
 
