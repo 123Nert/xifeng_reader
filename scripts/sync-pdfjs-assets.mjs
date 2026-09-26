@@ -42,7 +42,7 @@ function resolveProjectRoot() {
 const projectRoot = resolveProjectRoot()
 const destRoot = join(projectRoot, 'public', 'pdfjs')
 
-const DIRS = ['cmaps', 'standard_fonts']
+const DIRS = ['cmaps', 'standard_fonts', 'wasm']
 
 function resolvePdfjsRoot() {
   const require = createRequire(import.meta.url)

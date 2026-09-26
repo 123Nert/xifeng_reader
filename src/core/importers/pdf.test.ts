@@ -259,14 +259,19 @@ describe('importPdf（真实样本）', () => {
     await expect(importPdf(load('sample-encrypted.pdf'), 'x')).rejects.not.toThrow('扫描')
   })
 
-  it('整本扫描版（伪造 0 字符）→ 报 OCR 建议', async () => {
-    // 在单测里覆盖扫描版通路：把 PDF 截短导致 page.getTextContent 抛错（被吞为警告），
-    // 最终 looksScanned(0, N) 触发 "无文字" 分支。这条断言覆盖的是「扫描版 → 报 OCR 建议」
-    // 的代码路径是否存在；扫描版样本较难真实合成（需要全图无文字的 PDF），因此该路径
-    // 主要由 importPdf 内的 looksScanned 单元测试 + 此处验证"反正不会变成 'PDF 解析失败'"。
-    const truncated = load('sample-cn.pdf').slice(0, 100)
-    // 损坏到根本无法 PDF 解析 —— 落在"PDF 解析失败"
-    await expect(importPdf(truncated, 'x')).rejects.toThrow(ImportError)
+  it('sample-scan-only.pdf：真实扫描版 → 走图片分支（不报错、不带文字、warnings 提示扫描版）', async () => {
+    // 该 fixture 是从真实扫描版 PDF 抽出的 1 页，pdf.js 的 getTextContent 会返回空 items；
+    // 在浏览器环境下应进入 V6.1 的扫描版回退分支（page.render → scannedPages）。
+    // 但 Vitest 跑在 Node（没有 DOM canvas）， render 会走到 "无 canvas" 分支，
+    // 最后等价于"扫描版且无法在位图模式下渲染"——提示用户走 OCR。
+    // 这条断言同时证明：
+    //   1) importPdf 确实把样本判成 scanned（不会先抛"PDF 解析失败"）
+    //   2) 当 scannedPages 为空时按预期 throw "OCR 建议"，而不是把空内容吞掉
+    await expect(importPdf(load('sample-scan-only.pdf'), 'x')).rejects.toMatchObject({
+      name: 'ImportError',
+      message: expect.stringContaining('没有可提取的文字'),
+      hint: expect.stringContaining('OCR'),
+    })
   })
 
   it('损坏的 PDF → 报 "PDF 解析失败" 且给"重新下载"建议', async () => {

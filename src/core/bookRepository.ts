@@ -9,7 +9,7 @@
  * 不会重写几 MB 的正文记录。
  */
 
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPObjectStore } from 'idb'
 import type { BookFormat } from './importers/types'
 import {
   DEFAULT_HIGHLIGHT_COLOR,
@@ -40,6 +40,8 @@ export interface BookRecord {
   /** V5.0：作者 / 语言（EPUB 元信息） */
   author?: string
   language?: string
+  /** V6.1：扫描版 PDF 标记 —— content= '', 位图存 pdfPages store，阅读页走图片模式 */
+  scanned?: boolean
 }
 
 export interface ProgressRecord {
@@ -82,6 +84,8 @@ export interface LibraryEntry {
   format?: BookFormat
   cover?: string
   author?: string
+  /** V6.1：扫描版 PDF（位图存于 pdfPages，content 为空） */
+  scanned?: boolean
 }
 
 interface XifengDB extends DBSchema {
@@ -98,10 +102,22 @@ interface XifengDB extends DBSchema {
     value: HighlightRecord
     indexes: { 'by-book': string }
   }
+  /** V6.1：扫描版 PDF 的按页位图。一书的全部页存在 same bookId 下，避免 books 行变肥。 */
+  pdfPages: { key: [string, number]; value: PdfPageRecord }
+}
+
+/** V6.1 扫描版 PDF 一页的位图。key 用 [bookId, page] 展开，便于读当前页/全删/遍历。 */
+export interface PdfPageRecord {
+  bookId: string
+  page: number
+  width: number
+  height: number
+  /** dataURL（image/jpeg, 0.85），便于直接喂给 <img>。 */
+  dataUrl: string
 }
 
 const DB_NAME = 'xifeng-reader'
-const DB_VERSION = 4
+const DB_VERSION = 5
 
 let dbPromise: Promise<IDBPDatabase<XifengDB>> | null = null
 
@@ -124,6 +140,15 @@ function getDB(): Promise<IDBPDatabase<XifengDB>> {
           const store = db.createObjectStore('highlights', { keyPath: 'id' })
           store.createIndex('by-book', 'bookId')
         }
+        if (oldVersion < 5) {
+          // V6.1：扫描版 PDF 的位图按页存放。keyPath 用 [bookId, page] 复合键，
+          // 便于按书快速清空；by-book 索引支持任意字符串 bookId。
+          const store = db.createObjectStore('pdfPages', { keyPath: ['bookId', 'page'] })
+          ;(store as { createIndex(name: string, keyPath: string | string[]): unknown }).createIndex(
+            'by-book',
+            'bookId',
+          )
+        }
       },
     })
   }
@@ -133,6 +158,20 @@ function getDB(): Promise<IDBPDatabase<XifengDB>> {
 export async function addBook(book: BookRecord): Promise<void> {
   const db = await getDB()
   await db.put('books', book)
+}
+
+/** V6.1：保存/覆盖一本书的扫描页（content 仍写 ''，把位图放 pdfPages store）。 */
+export async function addScannedBook(
+  book: BookRecord,
+  pages: Array<Omit<PdfPageRecord, 'bookId'>>,
+): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction(['books', 'pdfPages'], 'readwrite')
+  await tx.objectStore('books').put(book)
+  for (const p of pages) {
+    await tx.objectStore('pdfPages').put({ ...p, bookId: book.id })
+  }
+  await tx.done
 }
 
 export async function getBook(id: string): Promise<BookRecord | undefined> {
@@ -154,19 +193,20 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
   let cursor = await db.transaction('books').store.openCursor()
   while (cursor) {
     const b = cursor.value
-    entries.push({
-      id: b.id,
-      title: b.title,
-      size: b.size,
-      charset: b.charset,
-      importedAt: b.importedAt,
-      charCount: b.content.length,
-      charIndex: 0,
-      lastReadAt: null,
-      format: b.format,
-      cover: b.cover,
-      author: b.author,
-    })
+      entries.push({
+        id: b.id,
+        title: b.title,
+        size: b.size,
+        charset: b.charset,
+        importedAt: b.importedAt,
+        charCount: b.content.length,
+        charIndex: 0,
+        lastReadAt: null,
+        format: b.format,
+        cover: b.cover,
+        author: b.author,
+        scanned: b.scanned,
+      })
     cursor = await cursor.continue()
   }
 
@@ -187,12 +227,58 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
 
 export async function deleteBook(id: string): Promise<void> {
   const db = await getDB()
-  const tx = db.transaction(['books', 'progress'], 'readwrite')
+  const tx = db.transaction(['books', 'progress', 'pdfPages'], 'readwrite')
   await Promise.all([
     tx.objectStore('books').delete(id),
     tx.objectStore('progress').delete(id),
+    // 扫描页的位图一并清掉，避免删书后 IndexedDB 还残留长尾存储
+    deletePdfPagesFromStore(id, tx.objectStore('pdfPages') as IDBPObjectStore<XifengDB, ['pdfPages'], 'pdfPages', 'readwrite'>),
     tx.done,
   ])
+}
+
+/** 整本的扫描页取出（按页码升序）。 */
+export async function listPdfPages(bookId: string): Promise<PdfPageRecord[]> {
+  const db = await getDB()
+  // idb 在 composite keyPath（[bookId, page]）上对 index 查询的泛型推断有问题，绕开它即可
+  const store = db.transaction('pdfPages').store
+  const list = await (store as unknown as {
+    index(name: 'by-book'): { getAll(query: IDBValidKey): Promise<PdfPageRecord[]> }
+  })
+    .index('by-book')
+    .getAll(bookId)
+  return list.sort((a, b) => a.page - b.page)
+}
+
+/** 写入整本扫描页（清空旧的后再写），由导入器在扫描版分支调用。 */
+export async function setPdfPages(
+  bookId: string,
+  pages: Array<Omit<PdfPageRecord, 'bookId'>>,
+): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction('pdfPages', 'readwrite')
+  await deletePdfPagesFromStore(bookId, tx.objectStore('pdfPages'))
+  for (const p of pages) {
+    await tx.objectStore('pdfPages').put({ ...p, bookId })
+  }
+  await tx.done
+}
+
+/** 删除某本书的全部扫描页。 */
+export async function deletePdfPages(bookId: string): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction('pdfPages', 'readwrite')
+  await deletePdfPagesFromStore(bookId, tx.objectStore('pdfPages'))
+  await tx.done
+}
+
+async function deletePdfPagesFromStore(
+  bookId: string,
+  store: IDBPObjectStore<XifengDB, ['pdfPages'], 'pdfPages', 'readwrite'>,
+): Promise<void> {
+  const idx = store.index('by-book' as never)
+  const keys = await idx.getAllKeys(IDBKeyRange.only(bookId) as never)
+  for (const k of keys) await store.delete(k)
 }
 
 /** 每次翻页即写，记录体量极小，无需去抖。 */

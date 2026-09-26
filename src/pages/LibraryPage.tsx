@@ -7,6 +7,7 @@ import { purifyText } from '../core/purify'
 import { importBook, ImportError, FORMAT_LABELS } from '../core/importers'
 import {
   addBook,
+  addScannedBook,
   deleteBook,
   exportBackup,
   getReadingStats,
@@ -95,7 +96,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
     void refresh()
   }, [refresh])
 
-  /** 导入单个文件（V5.0：多格式 + 净化 + 元信息）。返回给批量导入的成功标记。 */
+  /** 导入单个文件（V5.0：多格式 + 净化 + 元信息；V6.1：扫描版 PDF 走图片通道）。 */
   const importOneFile = useCallback(
     async (file: File): Promise<{ ok: boolean; title?: string; detail?: string }> => {
       try {
@@ -106,31 +107,55 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
           )
         })
 
+        const bookId = crypto.randomUUID()
         // 净化推广行（V1.3；对 EPUB 等的正文同样适用）
+        // 扫描版 PDF 没有 text 可净化，跳过这一步
         let content = result.text
         let removed = 0
-        if (purifyOn) {
+        if (purifyOn && content) {
           const report = purifyText(content)
           content = report.text
           removed = report.removed
         }
 
-        await addBook({
-          id: crypto.randomUUID(),
-          title: result.title,
-          content,
-          size: file.size,
-          charset: result.charset ?? result.format.toUpperCase(),
-          importedAt: Date.now(),
-          format: result.format,
-          cover: result.cover,
-          tocEntries: result.tocEntries,
-          author: result.author,
-          language: result.language,
-        })
+        if (result.scannedPages && result.scannedPages.length > 0) {
+          // V6.1：扫描版 PDF —— 把每页位图（dataURL）单独存进 pdfPages 表，books.content 留空
+          await addScannedBook(
+            {
+              id: bookId,
+              title: result.title,
+              content: '',
+              size: file.size,
+              charset: result.charset ?? result.format.toUpperCase(),
+              importedAt: Date.now(),
+              format: result.format,
+              cover: result.cover,
+              tocEntries: result.tocEntries,
+              author: result.author,
+              language: result.language,
+              scanned: true,
+            },
+            result.scannedPages.map((p, i) => ({ ...p, page: i })),
+          )
+        } else {
+          await addBook({
+            id: bookId,
+            title: result.title,
+            content,
+            size: file.size,
+            charset: result.charset ?? result.format.toUpperCase(),
+            importedAt: Date.now(),
+            format: result.format,
+            cover: result.cover,
+            tocEntries: result.tocEntries,
+            author: result.author,
+            language: result.language,
+          })
+        }
 
         const bits = [FORMAT_LABELS[result.format]]
         if (result.charset && result.format === 'txt') bits.push(result.charset.toUpperCase())
+        if (result.scannedPages && result.scannedPages.length > 0) bits.push('扫描版')
         if (removed > 0) bits.push(`净化 ${removed} 行`)
         if (result.tocEntries) bits.push(`${result.tocEntries.length} 章`)
         if (result.warnings.length > 0) bits.push(`${result.warnings.length} 处警告`)
@@ -448,7 +473,10 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
                   }
                 >
                   {entry.format && entry.format !== 'txt' && (
-                    <span className="cover-format">{FORMAT_LABELS[entry.format]}</span>
+                    <span className="cover-format">
+                      {FORMAT_LABELS[entry.format]}
+                      {entry.scanned ? '·扫描' : ''}
+                    </span>
                   )}
                   <span className="cover-title">{entry.title}</span>
                 </div>

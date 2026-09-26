@@ -28,11 +28,13 @@ import {
   getProgress,
   listBookmarks,
   listHighlights,
+  listPdfPages,
   relocateHighlights,
   updateHighlight,
   saveProgress,
   updateBookTocPattern,
   type BookmarkRecord,
+  type PdfPageRecord,
 } from '../core/bookRepository'
 import {
   applySettingsToDocument,
@@ -160,6 +162,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const viewportRef = useRef<HTMLDivElement>(null)
   const probeRef = useRef<HTMLDivElement>(null)
   const viewStartRef = useRef(0)
+  /** V6.1：扫描版 PDF 时缓存所有页位图 */
+  const scannedPagesRef = useRef<PdfPageRecord[]>([])
   /** 点按判定：记录按下位置与时刻（V4.0 与批注点击共同依赖） */
   const mouseDownRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
@@ -200,6 +204,21 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       if (!viewport || !probe) return
 
       textRef.current = book.content
+      // V6.1：扫描版 PDF（content 空 + pdfPages store 里存位图）→ 进入图片阅读分支
+      if (book.scanned) {
+        const pages = await listPdfPages(bookId)
+        if (cancelled) return
+        scannedPagesRef.current = pages
+        setTitle(book.title)
+        setAuthor(book.author ?? null)
+        setTotalChars(pages.length) // 扫描版用「页数」当总量，进度条按页推进
+        setPage({ start: 0, end: 1 })
+        setReady(true)
+        void saveProgress(bookId, 1)
+        setViewStart(1)
+        showToast('该 PDF 是扫描版，文字功能（搜索 / 划线 / 朗读）不可用')
+        return
+      }
       const measurer = createDomMeasurer(book.content, viewport, probe)
       const pm = new PageMap(book.content, measurer)
       const saved = await getProgress(bookId)
@@ -248,9 +267,27 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   }, [bookId, onBack])
 
   // ---- 翻页 / 跳转（每次落位即写进度，写入量极小；手动操作会停止自动翻页） ----
+  const isScanned = scannedPagesRef.current.length > 0
+  const totalPages = isScanned ? scannedPagesRef.current.length : 0
+
   const turn = useCallback(
     (dir: -1 | 1) => {
       const pm = pagemapRef.current
+      if (isScanned) {
+        // 扫描版没有 PageMap；按页号前进/后退
+        setAutoPlaying(false)
+        const total = totalPages
+        const cur = page.start
+        const next = dir === 1 ? Math.min(cur + 1, total - 1) : Math.max(cur - 1, 0)
+        if (next === cur) {
+          showToast(dir === 1 ? '已经是最后一页了' : '已经是第一页')
+          return
+        }
+        setPage({ start: next, end: next + 1 })
+        void saveProgress(bookId, next + 1) // 用户视角 1-based
+        setViewStart(next + 1)
+        return
+      }
       if (!pm) return
       setAutoPlaying(false)
       const ok = dir === 1 ? pm.goNext() : pm.goPrev()
@@ -267,6 +304,16 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const jumpToFraction = useCallback(
     (fraction: number) => {
+      if (isScanned) {
+        const total = totalPages
+        if (total === 0) return
+        setAutoPlaying(false)
+        const cur = Math.round(fraction * (total - 1))
+        setPage({ start: cur, end: cur + 1 })
+        void saveProgress(bookId, cur + 1)
+        setViewStart(cur + 1)
+        return
+      }
       const pm = pagemapRef.current
       if (!pm || pm.totalChars === 0) return
       setAutoPlaying(false)
@@ -805,13 +852,28 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     return () => window.clearTimeout(timer)
   }, [flashId])
 
-  const progressStart = isScroll ? viewStart : page.start
+  const progressStart = isScanned ? page.start : isScroll ? viewStart : page.start
   const percent =
-    totalChars > 1 ? (page.end >= totalChars ? 1 : progressStart / (totalChars - 1)) : 0
+    isScanned
+      ? totalPages > 0
+        ? page.start >= totalPages - 1
+          ? 1
+          : page.start / Math.max(1, totalPages - 1)
+        : 0
+      : totalChars > 1
+        ? page.end >= totalChars
+          ? 1
+          : progressStart / (totalChars - 1)
+        : 0
+
   const pageText = ready ? textRef.current.slice(page.start, page.end) : ''
   const chapterIdx =
     toc.entries.length > 0 ? currentChapterIndex(toc.entries, progressStart) : -1
-  const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
+  const chapterTitle = isScanned
+    ? `第 ${page.start + 1} 页`
+    : chapterIdx >= 0
+      ? toc.entries[chapterIdx].title
+      : null
 
   /**
    * 单行渲染：搜索命中（hit）+ 批注（hl，带颜色/样式）分段渲染。
@@ -897,6 +959,18 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     ))
 
   const renderContent = (): ReactNode => {
+    // V6.1：扫描版整本都是位图（content = ''）；scannedPages 已经有数据直接渲染当前页。
+    if (scannedPagesRef.current.length > 0) {
+      const p = scannedPagesRef.current[page.start] // page.start 即 0-based 页下标
+      if (!p) return '（该页尚未渲染完成，请稍后）'
+      return (
+        <img
+          src={p.dataUrl}
+          alt={`第 ${p.page + 1} 页`}
+          style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' }}
+        />
+      )
+    }
     if (!pageText) return ready && totalChars === 0 ? '（这本书没有正文内容）' : ''
     return renderSlice(pageText, page.start)
   }

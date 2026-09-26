@@ -33,6 +33,13 @@ export interface ImportResult {
   language?: string
   /** 局部失败报告（如某章解析失败），供 UI 提示 */
   warnings: string[]
+  /**
+   * V6.1 扫描版 PDF：每页位图（dataURL）。当 PDF 没有可提取文字时，
+   * `text` 为空字符串；调用方应通过 `scannedPages.length > 0` 判断走"图片阅读"分支，
+   * 不再去 `PageMap` / 章节切分。
+   * 仅在浏览器侧（pdf.js 可用 canvas）产出；Node 测试环境该字段恒为 undefined。
+   */
+  scannedPages?: Array<{ dataUrl: string; width: number; height: number }>
 }
 
 export class ImportError extends Error {
