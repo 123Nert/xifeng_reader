@@ -9,6 +9,7 @@ import { buildToc, currentChapterIndex, type Toc } from '../core/toc'
 import { searchText } from '../core/search'
 import {
   addBookmark,
+  addReadingMinutes,
   deleteBookmark,
   getBook,
   getProgress,
@@ -108,6 +109,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [patternDraft, setPatternDraft] = useState('')
   const [bookmarks, setBookmarks] = useState<BookmarkRecord[]>([])
   const [hlQuery, setHlQuery] = useState<string | null>(null)
+  const [autoPlaying, setAutoPlaying] = useState(false)
 
   const textRef = useRef('')
   const pagemapRef = useRef<PageMap | null>(null)
@@ -161,11 +163,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     }
   }, [bookId, onBack])
 
-  // ---- 翻页 / 跳转（每次落位即写进度，写入量极小） ----
+  // ---- 翻页 / 跳转（每次落位即写进度，写入量极小；手动操作会停止自动翻页） ----
   const turn = useCallback(
     (dir: -1 | 1) => {
       const pm = pagemapRef.current
       if (!pm) return
+      setAutoPlaying(false)
       const ok = dir === 1 ? pm.goNext() : pm.goPrev()
       if (!ok) {
         showToast(dir === 1 ? '已经是最后一页了' : '已经是第一页')
@@ -181,6 +184,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     (fraction: number) => {
       const pm = pagemapRef.current
       if (!pm || pm.totalChars === 0) return
+      setAutoPlaying(false)
       const target = Math.round(fraction * (pm.totalChars - 1))
       pm.jumpTo(target)
       setPage({ ...pm.current })
@@ -268,6 +272,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     (charIndex: number) => {
       const pm = pagemapRef.current
       if (!pm) return
+      setAutoPlaying(false)
       pm.jumpTo(charIndex)
       setPage({ ...pm.current })
       void saveProgress(bookId, pm.current.start)
@@ -339,6 +344,33 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [turn, onBack, menuOpen])
+
+  // ---- 阅读时长统计（V2.0）：页面可见时每 30 秒计 0.5 分钟，后台挂机不计 ----
+  useEffect(() => {
+    if (!ready) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void addReadingMinutes(0.5)
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [ready])
+
+  // ---- 自动翻页（V2.0）：按设定间隔向后翻，到末页自动停止 ----
+  useEffect(() => {
+    if (!autoPlaying || !ready) return
+    const timer = window.setInterval(() => {
+      const pm = pagemapRef.current
+      if (!pm) return
+      if (pm.atLastPage) {
+        setAutoPlaying(false)
+        showToast('已到最后一页，自动翻页结束')
+        return
+      }
+      pm.goNext()
+      setPage({ ...pm.current })
+      void saveProgress(bookId, pm.current.start)
+    }, settings.autoPageSeconds * 1000)
+    return () => window.clearInterval(timer)
+  }, [autoPlaying, ready, settings.autoPageSeconds, bookId, showToast])
 
   // ---- 窗口尺寸变化：去抖后刷新度量并锚定重排 ----
   useEffect(() => {
@@ -441,6 +473,13 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         <div className="bottom-row">
           <span className="page-info">{Math.round(percent * 100)}%</span>
           <div className="menu-buttons">
+            <button
+              className={`btn chip${autoPlaying ? ' active' : ''}`}
+              title="自动向后翻页（速度在设置中调整）"
+              onClick={() => setAutoPlaying((v) => !v)}
+            >
+              {autoPlaying ? '⏸ 停止' : '▶ 自动'}
+            </button>
             <button className="btn chip" onClick={() => openMenu('toc')}>
               目录
             </button>
@@ -486,6 +525,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         }
         onFontFamily={(name) => updateTypography({ fontFamily: name })}
         onCustomFontFile={(file) => void handleCustomFont(file)}
+        onAutoSeconds={(s) => updateTypography({ autoPageSeconds: s })}
       />
 
       {toast && <div className="toast">{toast}</div>}

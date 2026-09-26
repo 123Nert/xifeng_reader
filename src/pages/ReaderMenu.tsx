@@ -7,6 +7,7 @@ import type { Toc } from '../core/toc'
 import type { BookmarkRecord } from '../core/bookRepository'
 import type { SearchHit } from '../core/search'
 import {
+  AUTO_PAGE_SECONDS,
   FONT_FAMILY_LABELS,
   FONT_FAMILY_NAMES,
   MARGIN_LABELS,
@@ -51,6 +52,7 @@ interface Props {
   onAlignToggle: () => void
   onFontFamily: (name: FontFamilyName) => void
   onCustomFontFile: (file: File) => void
+  onAutoSeconds: (seconds: number) => void
 }
 
 const TABS: Array<{ key: MenuTab; label: string }> = [
@@ -312,6 +314,21 @@ function SettingsPane(props: Props) {
               {THEME_LABELS[t]}
             </button>
           ))}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">自动翻页</span>
+        <div className="set-value">
+          {AUTO_PAGE_SECONDS.map((s) => (
+            <button
+              key={s}
+              className={`btn chip${settings.autoPageSeconds === s ? ' active' : ''}`}
+              onClick={() => props.onAutoSeconds(s)}
+            >
+              {s}秒
+            </button>
+          ))}
+          <span className="set-hint">底栏「▶ 自动」启动</span>
         </div>
       </div>
       <div className="set-row">
