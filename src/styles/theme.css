@@ -311,6 +311,39 @@ button {
   pointer-events: none;
 }
 
+/* 滚动阅读模式（V2.1）：视口本身滚动，页面块顺排 */
+.page-viewport.scroll-mode {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.scroll-mode .tap-zone.left,
+.scroll-mode .tap-zone.right {
+  pointer-events: none; /* 触摸/滚轮滚动不被点按区域拦截，左右翻页用按钮与键盘 */
+}
+
+.scroll-flow,
+.scroll-page {
+  font-size: var(--content-font-size);
+  line-height: var(--content-line-height);
+  font-family: var(--content-font-family);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  text-align: var(--content-align, start);
+  text-indent: var(--content-indent, 0em);
+}
+
+.scroll-flow {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 64px var(--content-padding-x, 26px) 140px;
+}
+
+.scroll-page + .scroll-page {
+  margin-top: calc(var(--content-para-spacing, 0.5em) + 1.6em);
+}
+
 .reader-loading {
   position: absolute;
   inset: 0;

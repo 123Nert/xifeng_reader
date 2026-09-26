@@ -11,11 +11,14 @@ import {
   FONT_FAMILY_LABELS,
   FONT_FAMILY_NAMES,
   MARGIN_LABELS,
+  PAGE_MODE_LABELS,
+  PAGE_MODE_NAMES,
   PARA_SPACING_LABELS,
   PARA_SPACING_STEPS,
   THEME_LABELS,
   THEME_NAMES,
   type FontFamilyName,
+  type PageModeName,
   type ReaderSettings,
   type ThemeName,
 } from '../core/settings'
@@ -53,6 +56,7 @@ interface Props {
   onFontFamily: (name: FontFamilyName) => void
   onCustomFontFile: (file: File) => void
   onAutoSeconds: (seconds: number) => void
+  onPageMode: (mode: PageModeName) => void
 }
 
 const TABS: Array<{ key: MenuTab; label: string }> = [
@@ -312,6 +316,20 @@ function SettingsPane(props: Props) {
               onClick={() => props.onTheme(t)}
             >
               {THEME_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">阅读模式</span>
+        <div className="set-value">
+          {PAGE_MODE_NAMES.map((m) => (
+            <button
+              key={m}
+              className={`btn chip${settings.pageMode === m ? ' active' : ''}`}
+              onClick={() => props.onPageMode(m)}
+            >
+              {PAGE_MODE_LABELS[m]}
             </button>
           ))}
         </div>

@@ -42,6 +42,7 @@ const DEFAULTS: ReaderSettings = {
   align: 'start',
   fontFamily: 'serif',
   autoPageSeconds: 10,
+  pageMode: 'paged',
 }
 
 describe('settings: 读写', () => {
@@ -61,6 +62,7 @@ describe('settings: 读写', () => {
       fontFamily: 'kai',
       customFontName: 'MyFont',
       autoPageSeconds: 5,
+      pageMode: 'scroll',
     }
     const storage = makeStorage()
     saveSettings(s, storage)

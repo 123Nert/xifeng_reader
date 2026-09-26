@@ -26,6 +26,8 @@ export interface ReaderSettings {
   customFontName?: string
   /** 自动翻页间隔（秒） */
   autoPageSeconds: number
+  /** 阅读模式（V2.1）：分页 / 连续滚动 */
+  pageMode: PageModeName
 }
 
 export const FONT_MIN = 14
@@ -96,6 +98,13 @@ export const FONT_FAMILY_STACKS: Record<FontFamilyName, string> = {
 export const AUTO_PAGE_SECONDS = [5, 10, 15, 30] as const
 export const AUTO_PAGE_DEFAULT: number = 10
 
+// ---------- V2.1 阅读模式 ----------
+
+export const PAGE_MODE_NAMES = ['paged', 'scroll'] as const
+export type PageModeName = (typeof PAGE_MODE_NAMES)[number]
+export const PAGE_MODE_DEFAULT: PageModeName = 'paged'
+export const PAGE_MODE_LABELS: Record<PageModeName, string> = { paged: '分页', scroll: '滚动' }
+
 const STORAGE_KEY = 'xifeng.settings'
 
 export function clampFontSize(size: number): number {
@@ -120,6 +129,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
     align: 'start',
     fontFamily: FONT_FAMILY_DEFAULT,
     autoPageSeconds: AUTO_PAGE_DEFAULT,
+    pageMode: PAGE_MODE_DEFAULT,
   }
   try {
     const raw = storage.getItem(STORAGE_KEY)
@@ -153,6 +163,9 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
         )
           ? (p.autoPageSeconds as number)
           : fallback.autoPageSeconds,
+        pageMode: PAGE_MODE_NAMES.includes(p.pageMode as PageModeName)
+          ? (p.pageMode as PageModeName)
+          : fallback.pageMode,
       }
     }
   } catch {

@@ -3,8 +3,8 @@
  * 只渲染当前页切片；翻页 / 跳转 / 锚定重排全部委托 core 层 PageMap。
  * 顶栏与底栏为悬浮层：显隐不改变正文区尺寸，避免无谓重排。
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { PageMap, type Measurer } from '../core/pagination'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { PageMap, type Measurer, type Page } from '../core/pagination'
 import { buildToc, currentChapterIndex, type Toc } from '../core/toc'
 import { searchText } from '../core/search'
 import {
@@ -110,18 +110,28 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [bookmarks, setBookmarks] = useState<BookmarkRecord[]>([])
   const [hlQuery, setHlQuery] = useState<string | null>(null)
   const [autoPlaying, setAutoPlaying] = useState(false)
+  /** 滚动模式（V2.1）：锚点页之后已渲染的页数、视口顶部所在页起点 */
+  const [extraCount, setExtraCount] = useState(0)
+  const [viewStart, setViewStart] = useState(0)
 
   const textRef = useRef('')
   const pagemapRef = useRef<PageMap | null>(null)
   const measurerRef = useRef<(Measurer & { refresh(): void }) | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const probeRef = useRef<HTMLDivElement>(null)
+  const viewStartRef = useRef(0)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
     window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), 1600)
+  }, [])
+
+  /** 重置滚动窗口：锚点页回到窗口头部（滚动模式换页/跳转时调用）。 */
+  const resetScrollWindow = useCallback(() => {
+    setExtraCount(0)
+    if (viewportRef.current) viewportRef.current.scrollTop = 0
   }, [])
 
   // ---- 初始化：加载正文与进度，建立 Measurer + PageMap，续读定位 ----
@@ -151,6 +161,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setTitle(book.title)
       setTotalChars(pm.totalChars)
       setPage({ ...pm.current })
+      setViewStart(pm.current.start)
       setToc(buildToc(book.content, book.tocPattern))
       setPatternDraft(book.tocPattern ?? '')
       setBookmarks(await listBookmarks(bookId))
@@ -175,9 +186,10 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         return
       }
       setPage({ ...pm.current })
+      if (settings.pageMode === 'scroll') resetScrollWindow()
       void saveProgress(bookId, pm.current.start)
     },
-    [bookId, showToast],
+    [bookId, showToast, settings.pageMode, resetScrollWindow],
   )
 
   const jumpToFraction = useCallback(
@@ -188,9 +200,10 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       const target = Math.round(fraction * (pm.totalChars - 1))
       pm.jumpTo(target)
       setPage({ ...pm.current })
+      if (settings.pageMode === 'scroll') resetScrollWindow()
       void saveProgress(bookId, pm.current.start)
     },
-    [bookId],
+    [bookId, settings.pageMode, resetScrollWindow],
   )
 
   /**
@@ -213,6 +226,9 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     if (!pm) return
     measurerRef.current?.refresh()
     setPage({ ...pm.reflow() })
+    setViewStart(pm.current.start)
+    // 滚动模式：重排后版面高度变化，回到锚点页头部
+    if (next.pageMode === 'scroll' && viewportRef.current) viewportRef.current.scrollTop = 0
   }, [])
 
   const changeFont = useCallback(
@@ -275,10 +291,11 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       setAutoPlaying(false)
       pm.jumpTo(charIndex)
       setPage({ ...pm.current })
+      if (settings.pageMode === 'scroll') resetScrollWindow()
       void saveProgress(bookId, pm.current.start)
       setMenuOpen(false)
     },
-    [bookId],
+    [bookId, settings.pageMode, resetScrollWindow],
   )
 
   const openMenu = useCallback((tab: MenuTab) => {
@@ -289,14 +306,16 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const handleAddBookmark = useCallback(async () => {
     const pm = pagemapRef.current
     if (!pm) return
+    // 滚动模式以"视口顶部所在页"为当前位置
+    const start = settings.pageMode === 'scroll' ? viewStartRef.current : pm.current.start
     const excerpt = textRef.current
-      .slice(pm.current.start, pm.current.start + 48)
+      .slice(start, start + 48)
       .replace(/\s+/g, ' ')
       .trim()
-    await addBookmark(bookId, pm.current.start, excerpt)
+    await addBookmark(bookId, start, excerpt)
     setBookmarks(await listBookmarks(bookId))
     showToast('已添加书签')
-  }, [bookId, showToast])
+  }, [bookId, showToast, settings.pageMode])
 
   const handleDeleteBookmark = useCallback(
     async (id: string) => {
@@ -354,7 +373,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     return () => window.clearInterval(timer)
   }, [ready])
 
-  // ---- 自动翻页（V2.0）：按设定间隔向后翻，到末页自动停止 ----
+  // ---- 自动翻页（V2.0）：按设定间隔向后翻，到末页自动停止；滚动模式下滚回窗口头部 ----
   useEffect(() => {
     if (!autoPlaying || !ready) return
     const timer = window.setInterval(() => {
@@ -367,10 +386,11 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       }
       pm.goNext()
       setPage({ ...pm.current })
+      if (settings.pageMode === 'scroll') resetScrollWindow()
       void saveProgress(bookId, pm.current.start)
     }, settings.autoPageSeconds * 1000)
     return () => window.clearInterval(timer)
-  }, [autoPlaying, ready, settings.autoPageSeconds, bookId, showToast])
+  }, [autoPlaying, ready, settings.autoPageSeconds, settings.pageMode, bookId, showToast, resetScrollWindow])
 
   // ---- 窗口尺寸变化：去抖后刷新度量并锚定重排 ----
   useEffect(() => {
@@ -391,43 +411,98 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     }
   }, [])
 
-  const percent = totalChars > 1 ? (page.end >= totalChars ? 1 : page.start / (totalChars - 1)) : 0
+  // ---- 滚动模式（V2.1）：锚点页窗口 + 触底扩展 + 顶部页进度跟踪 ----
+  useEffect(() => {
+    viewStartRef.current = viewStart
+  }, [viewStart])
+
+  const isScroll = settings.pageMode === 'scroll'
+
+  /** 锚点页之后按需链式计算的页序列（fitFrom 纯函数，不改状态）。 */
+  const extraPages = useMemo<Page[]>(() => {
+    if (!isScroll || !ready) return []
+    const pm = pagemapRef.current
+    if (!pm) return []
+    const pages: Page[] = []
+    let from = page.end
+    for (let i = 0; i < extraCount; i++) {
+      if (from >= totalChars) break
+      const end = pm.fitFrom(from)
+      pages.push({ start: from, end })
+      from = end
+    }
+    return pages
+  }, [isScroll, ready, page.end, extraCount, totalChars])
+
+  const lastRenderedEnd = extraPages.length ? extraPages[extraPages.length - 1].end : page.end
+  const canExtend = lastRenderedEnd < totalChars
+
+  // 视口未被填满时自动追加页（末页之后停止，避免死循环）
+  useEffect(() => {
+    if (!isScroll || !ready || !canExtend) return
+    const el = viewportRef.current
+    if (!el) return
+    if (el.scrollHeight <= el.clientHeight + 4) setExtraCount((c) => c + 2)
+  }, [isScroll, ready, canExtend, extraPages, page.end])
+
+  /** 滚动驱动：跟踪视口顶部所在页（进度/章节），触底时扩展窗口。 */
+  const handleScrollFlow = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const el = e.currentTarget
+      let top = 0
+      el.querySelectorAll<HTMLElement>('.scroll-page').forEach((d) => {
+        if (d.offsetTop <= el.scrollTop + 8) top = Number(d.dataset.start)
+      })
+      if (top !== viewStartRef.current) {
+        setViewStart(top)
+        void saveProgress(bookId, top)
+      }
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) setExtraCount((c) => c + 2)
+    },
+    [bookId],
+  )
+
+  const progressStart = isScroll ? viewStart : page.start
+  const percent =
+    totalChars > 1 ? (page.end >= totalChars ? 1 : progressStart / (totalChars - 1)) : 0
   const pageText = ready ? textRef.current.slice(page.start, page.end) : ''
-  const chapterIdx = toc.entries.length > 0 ? currentChapterIndex(toc.entries, page.start) : -1
+  const chapterIdx =
+    toc.entries.length > 0 ? currentChapterIndex(toc.entries, progressStart) : -1
   const chapterTitle = chapterIdx >= 0 ? toc.entries[chapterIdx].title : null
 
-  /** 正文渲染：逐段渲染（V1.3 排版），搜索关键词命中处在当前页内高亮。 */
+  /** 单行渲染：命中搜索词时高亮。 */
+  const renderLine = (line: string, key: string | number): ReactNode => {
+    const q = hlQuery?.trim().toLowerCase()
+    if (!q) return line
+    const lower = line.toLowerCase()
+    if (!lower.includes(q)) return line
+    const parts: ReactNode[] = []
+    let from = 0
+    let k = 0
+    for (;;) {
+      const idx = lower.indexOf(q, from)
+      if (idx < 0) {
+        parts.push(line.slice(from))
+        break
+      }
+      parts.push(line.slice(from, idx))
+      parts.push(<mark key={`${key}-${k++}`}>{line.slice(idx, idx + q.length)}</mark>)
+      from = idx + q.length
+    }
+    return parts
+  }
+
+  /** 一页文本 → 段落块序列（与测量探针共用同一结构规则）。 */
+  const renderSlice = (slice: string): ReactNode =>
+    splitParas(slice).map((line, i) => (
+      <div className="page-para" key={i}>
+        {renderLine(line, i)}
+      </div>
+    ))
+
   const renderContent = (): ReactNode => {
     if (!pageText) return ready && totalChars === 0 ? '（这本书没有正文内容）' : ''
-    const q = hlQuery?.trim().toLowerCase()
-    const paras = splitParas(pageText)
-    return paras.map((line, i) => {
-      let content: ReactNode = line
-      if (q) {
-        const lower = line.toLowerCase()
-        if (lower.includes(q)) {
-          const parts: ReactNode[] = []
-          let from = 0
-          let k = 0
-          for (;;) {
-            const idx = lower.indexOf(q, from)
-            if (idx < 0) {
-              parts.push(line.slice(from))
-              break
-            }
-            parts.push(line.slice(from, idx))
-            parts.push(<mark key={k++}>{line.slice(idx, idx + q.length)}</mark>)
-            from = idx + q.length
-          }
-          content = parts
-        }
-      }
-      return (
-        <div className="page-para" key={i}>
-          {content}
-        </div>
-      )
-    })
+    return renderSlice(pageText)
   }
 
   return (
@@ -443,10 +518,29 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         <div className="top-spacer" />
       </header>
 
-      <main ref={viewportRef} className="page-viewport">
-        <div className="page-content" aria-live="polite">
-          {renderContent()}
-        </div>
+      <main ref={viewportRef} className={`page-viewport${isScroll ? ' scroll-mode' : ''}`}>
+        {isScroll ? (
+          <div className="scroll-flow" onScroll={handleScrollFlow}>
+            {totalChars === 0 ? (
+              <div className="menu-empty">（这本书没有正文内容）</div>
+            ) : (
+              <>
+                <div className="scroll-page" data-start={page.start}>
+                  {renderSlice(pageText)}
+                </div>
+                {extraPages.map((p) => (
+                  <div className="scroll-page" key={p.start} data-start={p.start}>
+                    {renderSlice(textRef.current.slice(p.start, p.end))}
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="page-content" aria-live="polite">
+            {renderContent()}
+          </div>
+        )}
         {/* 离屏测量探针：与正文同宽同样式，仅用于分页测量 */}
         <div ref={probeRef} className="page-probe" aria-hidden="true" />
         <div className="tap-zone left" title="上一页（←）" onClick={() => turn(-1)} />
@@ -526,6 +620,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         onFontFamily={(name) => updateTypography({ fontFamily: name })}
         onCustomFontFile={(file) => void handleCustomFont(file)}
         onAutoSeconds={(s) => updateTypography({ autoPageSeconds: s })}
+        onPageMode={(m) => updateTypography({ pageMode: m })}
       />
 
       {toast && <div className="toast">{toast}</div>}
