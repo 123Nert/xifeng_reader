@@ -328,6 +328,33 @@ button {
   color: var(--text);
 }
 
+/*
+ * 扫描版 PDF（V6.1）位图页：整页是一张图，高度可达千余 px，需要滚动才能看全。
+ * .page-content 的 absolute + top/bottom:0 + overflow:hidden 是分页模式的"固定一页"
+ * 布局，会把位图钳在视口高度里 —— 底部沉到悬浮进度条下面且无法滚出。
+ * .scan-page 解除钳制：文档流内自然生长、上下 padding 预留悬浮工具栏高度，
+ * 滚动交给 .page-viewport.scroll-mode（分页模式下位图按页翻，本就不需要滚动）。
+ */
+.page-content.scan-page {
+  position: static;
+  bottom: auto;
+  overflow: visible;
+  /* 扫描版 img 自带 margin:0 auto，容器退化为普通块级包裹 */
+  padding: 64px var(--content-padding-x, 26px) 104px;
+}
+
+/* 扫描版位图：完整显示整页（不裁剪），滚动模式或分页模式均可见。
+ * 分页模式视口不可滚，一页图 ~1020px 远超视口 —— 必须限高到"视口减悬浮工具栏"
+ * （64px 顶栏 + 104px 底栏 = 168px），整页缩进一屏；滚动模式同样适用，
+ * 图片高于该值时按比例缩小，配合容器 padding 保证完整可见。 */
+.page-content.scan-page img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - 168px);
+  height: auto;
+  margin: 0 auto;
+}
+
 /* 离屏测量探针：不设 bottom 约束，高度随内容自然生长；视觉隐藏但参与布局 */
 .page-probe {
   visibility: hidden;

@@ -1023,7 +1023,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
             )}
           </div>
         ) : (
-          <div className="page-content" aria-live="polite">
+          <div className={`page-content${isScanned ? ' scan-page' : ''}`} aria-live="polite">
             {renderContent()}
           </div>
         )}
