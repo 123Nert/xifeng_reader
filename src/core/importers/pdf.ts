@@ -375,10 +375,13 @@ export async function importPdf(
         let page: PdfPage | null = null
         try {
           page = await doc.getPage(i)
-          const viewport = page.getViewport({ scale: 2.0 })
-          // 用小尺寸即可保证阅读清晰：A4 页面宽度 ~595pt，scale 2 → 1190px，足够 1080p 屏。
-          // 不让任何一页超过 MAX_DIM，避免个别超大页（图表 / 海报）撑爆内存。
-          const MAX_DIM = 2000
+          // 位图源分辨率：用户可用 Ctrl+滚轮/＋ 控件放大到最高 ×4 ——
+          // 源图必须留出放大余量，否则放大后字迹发虚（V6.1 用户反馈"更看不清"）。
+          // 基准 scale 3（A4 宽 ~595pt → 1786px），放大 ×4 时显示 7144px 仍有效。
+          const viewport = page.getViewport({ scale: 3.0 })
+          // 不让任何一页超过 MAX_DIM，避免个别超大页（图表 / 海报）撑爆内存；
+          // 同时限制单页 dataURL 体积（IndexedDB 单条记录不宜过大）。
+          const MAX_DIM = 3000
           const scaleDown = Math.min(1, MAX_DIM / Math.max(viewport.width, viewport.height))
           const finalScale = viewport.scale * scaleDown
           const finalViewport = page.getViewport({ scale: finalScale })

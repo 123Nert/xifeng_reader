@@ -142,6 +142,11 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   }, [page])
   const [chromeVisible, setChromeVisible] = useState(true)
   const [settings, setSettings] = useState<ReaderSettings>(() => loadSettings())
+  // wheel/键盘回调里读的设置镜像：useCallback/事件闭包可能拿到过期 settings
+  const settingsRef = useRef(settings)
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
   const [ready, setReady] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [toc, setToc] = useState<Toc>({ entries: [], source: 'none' })
@@ -821,14 +826,15 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   useEffect(() => {
     const el = viewportRef.current
     if (!el || !isScanned) return
+    // 缩放基准必须与 settings.scanZoom 同步（dataset 只在 wheel 里更新，
+    // 打开书时未初始化，会从 1 重新起步 —— 用户已设置的倍数被重置）
+    el.dataset.scanZoom = String(settingsRef.current.scanZoom)
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
-      const delta = e.deltaY < 0 ? 1 : -1
-      const next = clampScanZoom(
-        (Number(el.dataset.scanZoom) || 1) + delta * SCAN_ZOOM_STEP,
-      )
-      if (next === (Number(el.dataset.scanZoom) || 1)) return
+      const cur = Number(el.dataset.scanZoom) || 1
+      const next = clampScanZoom(cur + (e.deltaY < 0 ? SCAN_ZOOM_STEP : -SCAN_ZOOM_STEP))
+      if (next === cur) return
       el.dataset.scanZoom = String(next)
       setSettings((prev) => {
         const merged = { ...prev, scanZoom: next }
