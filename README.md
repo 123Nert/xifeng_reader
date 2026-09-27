@@ -1,7 +1,7 @@
 # xifeng 阅读
 
 [![version](https://img.shields.io/github/v/tag/123Nert/xifeng_reader?label=version)](https://github.com/123Nert/xifeng_reader/tags)
-[![tests](https://img.shields.io/badge/tests-172%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-199%20passing-brightgreen)](src)
 [![PWA](https://img.shields.io/badge/PWA-ready-blueviolet)](vite.config.ts)
 
 本地电子书阅读器（Web 应用）。核心闭环：**导入一本书 → 舒服地读完 → 下次打开接着读**。
@@ -13,30 +13,37 @@
 - 导入 **TXT / EPUB / Markdown / HTML / PDF**（多选批量导入，拖拽即可）
 - TXT 自动识别 UTF-8 / GB18030（含 GBK）/ Big5 / UTF-16，可手动指定编码
 - EPUB 解析真实章节与目录、提取封面与作者（零依赖自研解析，见 [V5.0 方案](docs/V5.0-多格式导入方案.md)）
-- PDF 抽文本阅读：文字版走 pdf.js 抽文本（章节识别优先 + 页码兜底），**扫描版回退为按页位图阅读**（首次打开时按需加载 pdf.js，见 [V6.0 方案](docs/V6.0-PDF支持方案.md)）
+- PDF **原版阅读**：导入时连原文件一起保存，阅读页默认显示 PDF 原来的样子（版式 / 图片 / 表格都在），可一键切到文字视图做搜索、划线、朗读（见 [V6.2 方案](docs/V6.2-PDF原版阅读方案.md)）
 - 书库：书名、阅读进度、最后阅读时间、搜索/排序/重命名/批量删除、阅读时长统计（今日/本周/累计）
 - 阅读页：分页 / 连续滚动两种模式；按钮 / 键盘 / 点按区域翻页；自动翻页；TTS 朗读（读完自动翻页）
 - 排版：字号、行距、段距、页边距、首行缩进、两端对齐、字体预设与自定义字体
 - 主题：日间 / 护眼 / 夜间
 - 导航：章节目录（内置 + 自定义正则）、书签、全文搜索（页面内高亮）、划线笔记（可导出 Markdown，见 [V4.0 方案](docs/V4.0-批注与笔记方案.md)）
 - 进度自动保存，重新打开精确续读；进度条拖动跳转任意位置
-- PWA 可安装，离线可读；备份导出 / 导入（全量 JSON）
+- PWA 可安装，离线可读；备份导出 / 导入（全量 JSON，含 PDF 原件）
 
 ## 当前版本
 
-**V6.1 扫描版 PDF 兜底** ✅
+**V6.2 PDF 原版阅读** ✅
 
-- 文字版 PDF：pdf.js 按需加载，抽文本 → 章节 / 页码双兜底，与 TXT/EPUB 共用同一套阅读管线。
-- 扫描版 PDF：**不再拒收**，直接位图按页翻页；书名/页目录/进度可读，文字功能（搜索/划线/朗读）显式禁用。
-- IndexedDB 升级到 V5，新增 `pdfPages` store 存位图；删除书籍时同步清理。
+- 导入 PDF 时把**原文件整份**存进 `pdfFiles`（DB v6），不再只留抽出的文字；
+  一本 3 页的 PDF 导入仍在秒级完成（导入期不再需要 canvas）。
+- 阅读页默认显示**原版页面**：pdf.js 按当前显示尺寸实时渲染当前页，
+  版式 / 图片 / 表格 / 公式原样呈现；×4 放大也是原生清晰度（不是拉伸位图）。
+- 底栏「原版 / 文字」一键切换：搜索、划线、批注、朗读在文字视图照常可用，
+  切换时按字符偏移带过位置，进度条 / 书签 / 目录跳转两视图通用。
+- 纯扫描版 PDF 只有原版视图（没有文字层），并明确提示文字功能不可用；
+  V6.1 存下的按页位图仍兼容可读。
+- IndexedDB 升到 V6（新增 `pdfFiles`）；备份导出连原件一起带走。
 
-完整设计与落地见 [docs/V6.0-PDF支持方案.md](docs/V6.0-PDF支持方案.md) 与本次提交。
+完整设计见 [docs/V6.2-PDF原版阅读方案.md](docs/V6.2-PDF原版阅读方案.md)。
 
 历史版本：
 
 | 版本 | 主题 | 标记 |
 | --- | --- | --- |
-| v6.1.0 | 扫描版 PDF 按页位图阅读 | ✅ 当前 |
+| v6.2.0 | PDF 原版阅读（原文件入库 + 按需渲染 + 双视图） | ✅ 当前 |
+| v6.1.0 | 扫描版 PDF 按页位图阅读 | ✅ |
 | v6.0.0 | PDF 支持（pdf.js 按需加载） | ✅ |
 | v5.0.0 | 多格式导入（EPUB / MD / HTML + 批量） | ✅ |
 | v4.0.0 | 批注与笔记体系（6 色 × 4 样式 + 容错锚定） | ✅ |
@@ -53,7 +60,7 @@
 ```bash
 npm install
 npm run dev        # 开发（http://localhost:5173）
-npm run test       # Vitest 单元测试（172 例）
+npm run test       # Vitest 单元测试（199 例）
 npm run build      # 产出纯静态文件到 dist/
 npm run preview    # 本地预览构建产物
 ```
@@ -81,7 +88,10 @@ src/
 │  ├─ toc.ts                 # 章节切分（内置 + 自定义正则）
 │  ├─ search.ts              # 全文搜索
 │  ├─ purify.ts              # 导入净化（推广行清理）
-│  ├─ bookRepository.ts      # IndexedDB 读写（books/progress/bookmarks/stats/highlights）
+│  ├─ bookRepository.ts      # IndexedDB 读写（books/progress/bookmarks/stats/highlights/pdfFiles）
+│  ├─ pdfNav.ts              # PDF 页码 ↔ 字符偏移换算
+│  ├─ pdfOriginal.ts         # PDF 原版页面按需渲染（清晰度/内存上限/取消）
+│  ├─ scanView.ts            # 位图等比显示几何（缩放不变形）
 │  └─ settings.ts            # 阅读设置（localStorage + CSS 变量）
 └─ styles/theme.css          # CSS 变量主题（日间/护眼/夜间）
 ```
@@ -98,3 +108,4 @@ src/
 - [docs/V5.0-多格式导入方案.md](docs/V5.0-多格式导入方案.md) — EPUB/MD/HTML 设计选型与"PDF 不做"的原始论证
 - [docs/V6.0-PDF支持方案.md](docs/V6.0-PDF支持方案.md) — 上述翻案：按需加载 / 扫描版识别 / 加密提示
 - [docs/V6.1-修复记录.md](docs/V6.1-修复记录.md) — PDF 导入失败三连修 + 扫描版位图被进度条遮挡的根因与验证
+- [docs/V6.2-PDF原版阅读方案.md](docs/V6.2-PDF原版阅读方案.md) — 原文件入库 + 读时按需渲染 + 原版/文字双视图

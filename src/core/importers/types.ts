@@ -34,12 +34,22 @@ export interface ImportResult {
   /** 局部失败报告（如某章解析失败），供 UI 提示 */
   warnings: string[]
   /**
-   * V6.1 扫描版 PDF：每页位图（dataURL）。当 PDF 没有可提取文字时，
-   * `text` 为空字符串；调用方应通过 `scannedPages.length > 0` 判断走"图片阅读"分支，
-   * 不再去 `PageMap` / 章节切分。
-   * 仅在浏览器侧（pdf.js 可用 canvas）产出；Node 测试环境该字段恒为 undefined。
+   * V6.2 PDF：原版页面位图（每页一张，dataURL）。与 `text` 并存 ——
+   * 阅读页默认按位图显示"原来的样子"（版式、图片、表格都在），
+   * 抽出的文字用于搜索 / 划线 / 朗读 / 分页续读。
+   * 位图只在浏览器侧产出（需要 DOM canvas）；Node 测试环境为 undefined。
    */
-  scannedPages?: Array<{ dataUrl: string; width: number; height: number }>
+  pdfPages?: Array<{ dataUrl: string; width: number; height: number }>
+  /**
+   * V6.2 PDF：第 i 页文字在 `text` 中的起始偏移（0-based 页号）。
+   * 页号 ↔ 字符偏移的换算见 core/pdfNav.ts；缺省表示没有对应表。
+   */
+  pdfPageStarts?: number[]
+  /**
+   * V6.2 PDF：是否存在可抽取的文字层。
+   * false（扫描版）时文字能力（搜索/划线/朗读）不可用，阅读页只给原版视图。
+   */
+  hasText?: boolean
 }
 
 export class ImportError extends Error {

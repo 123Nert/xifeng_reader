@@ -228,3 +228,94 @@ describe('bookRepository: 备份与恢复（V2.0）', () => {
     )
   })
 })
+
+// ---------- V6.2 PDF 原件 ----------
+
+describe('bookRepository: PDF 原件（V6.2）', () => {
+  const pdfBytes = () => new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2, 3]).buffer
+
+  it('addBookWithPdf 存入原件并标记 pdfOriginal', async () => {
+    const ok = await repo.addBookWithPdf(
+      { ...book('p1', '正文'), format: 'pdf', pdfPageCount: 3, pdfPageStarts: [0, 10, 20] },
+      { bytes: pdfBytes(), size: 7 },
+    )
+    expect(ok).toBe(true)
+    const b = await repo.getBook('p1')
+    expect(b?.pdfOriginal).toBe(true)
+    expect(b?.pdfPageCount).toBe(3)
+    expect(b?.pdfPageStarts).toEqual([0, 10, 20])
+    // 原件字节往返一致
+    const got = await repo.getPdfFile('p1')
+    expect(got && new Uint8Array(got).length).toBe(7)
+    expect(got && new Uint8Array(got)[0]).toBe(0x25)
+  })
+
+  it('不带原件时不标记 pdfOriginal，且清掉可能残留的旧原件', async () => {
+    await repo.addBookWithPdf({ ...book('p2', '正文'), format: 'pdf' }, { bytes: pdfBytes(), size: 7 })
+    expect(await repo.getPdfFile('p2')).toBeTruthy()
+
+    const ok = await repo.addBookWithPdf({ ...book('p2', '正文'), format: 'pdf' }, null)
+    expect(ok).toBe(false)
+    expect((await repo.getBook('p2'))?.pdfOriginal).toBeUndefined()
+    expect(await repo.getPdfFile('p2')).toBeUndefined()
+  })
+
+  it('deleteBook 一并清掉原件', async () => {
+    await repo.addBookWithPdf({ ...book('p3', '正文'), format: 'pdf' }, { bytes: pdfBytes(), size: 7 })
+    await repo.deleteBook('p3')
+    expect(await repo.getPdfFile('p3')).toBeUndefined()
+    expect(await repo.listLibrary()).toHaveLength(0)
+  })
+
+  it('listLibrary 带出 pdfOriginal / pdfPageCount', async () => {
+    await repo.addBookWithPdf(
+      { ...book('p4', '正文'), format: 'pdf', pdfPageCount: 9 },
+      { bytes: pdfBytes(), size: 7 },
+    )
+    const [entry] = await repo.listLibrary()
+    expect(entry.pdfOriginal).toBe(true)
+    expect(entry.pdfPageCount).toBe(9)
+    // 列表项不携带原始字节（避免把整本书的 PDF 拖进内存）
+    expect(entry).not.toHaveProperty('bytes')
+  })
+
+  it('备份带上原件 base64，导入后可还原字节', async () => {
+    await repo.addBookWithPdf({ ...book('p5', '正文'), format: 'pdf' }, { bytes: pdfBytes(), size: 7 })
+    const backup = await repo.exportBackup({})
+    expect(backup.pdfFiles).toHaveLength(1)
+    expect(typeof backup.pdfFiles?.[0].bytes).toBe('string')
+
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+    const report = await repo.importBackup(backup)
+    expect(report.pdfFiles).toBe(1)
+    const bytes = await repo.getPdfFile('p5')
+    expect(bytes && new Uint8Array(bytes)).toEqual(new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2, 3]))
+  })
+
+  it('老备份（无 pdfFiles 字段）导入不报错', async () => {
+    await repo.addBook(book('p6', '正文'))
+    const backup = await repo.exportBackup({})
+    delete backup.pdfFiles
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+    const report = await repo.importBackup(backup)
+    expect(report.books).toBe(1)
+    expect(report.pdfFiles).toBe(0)
+  })
+
+  it('原件 base64 损坏时跳过该条，不影响其余数据导入', async () => {
+    await repo.addBook(book('p7', '正文'))
+    const backup = await repo.exportBackup({})
+    backup.pdfFiles = [{ bookId: 'p7', bytes: '!!!not-base64!!!', size: 3 }]
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+    const report = await repo.importBackup(backup)
+    expect(report.books).toBe(1)
+    expect(report.pdfFiles).toBe(0)
+    expect(await repo.getPdfFile('p7')).toBeUndefined()
+  })
+})

@@ -1,12 +1,16 @@
 /**
- * pdf.ts — PDF 文本抽取（V6.0）。
+ * pdf.ts — PDF 导入：文字抽取（V6.0）+ 原版页面保留（V6.2）。
  *
  * 设计（见 docs/V6.0-PDF支持方案.md）：
  * - pdf.js **按需加载**：本模块只在用户真的导入 PDF 时才被动态引入，
  *   其 pdf.js 依赖随之加载，常规用户（TXT/EPUB）体积零影响；
- * - 只用 pdf.js 的 getTextContent（不渲染 canvas），产出纯文本 + 字符偏移，
- *   从而批注/搜索/TTS/进度等全部能力照常复用；
- * - 丢失 PDF 原始版式与图片（换取"能舒服地读"）；扫描版明确报错并建议 OCR。
+ * - 导入时只用 getTextContent 抽文字（不渲染 canvas），产出纯文本 + 字符偏移，
+ *   批注/搜索/TTS/进度等能力照常复用；
+ * - **原始文件整份随书保存**（调用方写进 pdfFiles store），阅读页按需渲染
+ *   "原版页面"——版式、图片、表格都在；文字层只承担搜索/划线/朗读。
+ *   渲染放在读时而非导入时：导入不必逐页画图（快），存储量等于原文件本身，
+ *   且放多大都能重新按目标分辨率渲染，字迹始终清晰。
+ * - 无文字层的扫描版同样走原版渲染（导入不再需要 canvas，也可在 Node 里跑通）。
  *
  * pdf.js v6 在 Vitest 下的坑（升级 pdfjs-dist 时务必回归验证）：
  * - **Node 检测不能用 `typeof window === 'undefined'`**：Vitest 用 jsdom / happy-dom
@@ -23,11 +27,6 @@
  *   用户输入的密码，不含 "password" 字样）；按 message 匹配会漏判。
  *   另外：在 Vitest 下 pdf.js 抛的异常可能被跨 realm 结构化克隆，
  *   `e instanceof Error` 可能为 false —— 必须按 `err.name` 字符串判定，不能 instanceof。
- * - **扫描版回退的销毁时序**：文字抽取通道结束时**不能**立刻 destroy loadingTask ——
- *   扫描版还要用同一个 doc 逐页渲染位图；提前 destroy 会拆掉 WorkerTransport，
- *   后续 `doc.getPage` 抛 `TypeError: Cannot read properties of null (reading 'sendWithPromise')`。
- *   销毁统一推迟到扫描渲染通道结束（或 Node 无 canvas 的提前抛错之前）。
- *   同理，扫描版的元信息（Title/Author）必须在 destroy 之前取，否则静默丢失。
  * - **`data` 必须传 slice 拷贝**：pdf.js `getDocument` 会把 `data.buffer`
  *   transfer 给 worker（即使是 fake worker 也会拆 buffer）—— 第二次再用同一个
  *   ArrayBuffer 会抛 `TypeError: Cannot perform Construct on a detached ArrayBuffer`。
@@ -54,30 +53,31 @@ interface PdfTextContent {
   items: PdfTextItem[]
 }
 
-interface PdfPage {
+export interface PdfPage {
   getTextContent(): Promise<PdfTextContent>
   /** pdf.js 渲染管线：把当前页画到提供的 canvas 上。 */
   getViewport(opts: { scale: number }): { width: number; height: number; scale: number }
   render(opts: { canvas?: unknown; canvasContext?: unknown; viewport: unknown }): { promise: Promise<unknown> }
+  cleanup?(): void
 }
 
 interface PdfMetadata {
   info?: { Title?: unknown; Author?: unknown }
 }
 
-interface PdfDocument {
+export interface PdfDocument {
   numPages: number
   getPage(n: number): Promise<PdfPage>
   getMetadata(): Promise<PdfMetadata>
 }
 
 /** v6：销毁入口在 loadingTask 上，不在 document 上。 */
-interface PdfLoadingTask {
+export interface PdfLoadingTask {
   promise: Promise<PdfDocument>
   destroy(): Promise<void>
 }
 
-interface PdfjsModule {
+export interface PdfjsModule {
   GlobalWorkerOptions: { workerSrc: string }
   getDocument(src: unknown): PdfLoadingTask
 }
@@ -123,7 +123,7 @@ export async function resolvePdfAssets(): Promise<PdfAssetUrls> {
 }
 
 /** 按需加载 pdf.js（浏览器带 worker，Node 测试走 legacy 主线程路径）。 */
-async function loadPdfjs(): Promise<PdfjsModule> {
+export async function loadPdfjs(): Promise<PdfjsModule> {
   if (!pdfjsPromise) {
     pdfjsPromise = (async () => {
       if (!isNodeRuntime()) {
@@ -243,7 +243,7 @@ export function chooseToc(text: string, pageStarts: number[]): TocEntryLite[] {
   return pageTocEntries(pageStarts)
 }
 
-/** 判定为扫描版：平均每页可提取字符过少。 */
+/** 判定为扫描版：平均每页可提取字符过少（仅用于提示，不再拒收）。 */
 export function looksScanned(totalChars: number, numPages: number): boolean {
   if (numPages === 0) return true
   return totalChars / numPages < 20
@@ -283,9 +283,8 @@ export async function importPdf(
       // 资源一律由主线程取（pdf.js 默认的 worker 内 fetch 需要同源且能构建 URL，
       // 部署到子路径时不稳定；主线程取保证与页面同源同基址）
       useWorkerFetch: false,
-      // 位图渲染 / 扫描版会用到 wasm/ 下的 jbig2 / openjpeg / qcms，
-      // 缺资源时 page.render 不抛 ImportError 而是 NetworkError，
-      // 进不了我们析错逻辑 —— 所以 wasmUrl 必须传对。
+      // 中文 PDF 的 Type0 字体常用预定义 CMap（/GBK-EUC-H 之类，不带 ToUnicode），
+      // 缺 cMapUrl 时不是报错而是"每页零字符"，会被误判成扫描版
       cMapPacked: true,
       disableAutoFetch: false,
     })
@@ -309,22 +308,26 @@ export async function importPdf(
 
   const warnings: string[] = []
   const numPages = doc.numPages
+  /** 第 i 页文字在全文中的起始偏移（含空页，与页码一一对应） */
   const pageStarts: number[] = []
-  const parts: string[] = []
-  let cursor = 0
+  let text = ''
   let totalChars = 0
 
   for (let i = 1; i <= numPages; i++) {
     onProgress?.({ phase: '抽取文字', current: i, total: numPages })
-    pageStarts.push(cursor)
     try {
       const page = await doc.getPage(i)
       const content = await page.getTextContent()
-      const text = assemblePageText(content.items ?? [])
-      if (text) {
-        parts.push(text)
-        cursor += text.length + 2
-        totalChars += text.length
+      const part = assemblePageText(content.items ?? [])
+      if (part) {
+        if (text) text += '\n\n'
+        pageStarts.push(text.length)
+        text += part
+        totalChars += part.length
+      } else {
+        // 空页（图版页 / 封面）：起点记在当时的位置，与相邻页共享，
+        // 保证 pageStarts.length 恒等于页数 —— 页码 ↔ 偏移才能一一对应
+        pageStarts.push(text.length)
       }
     } catch (e) {
       const err = e as { name?: unknown; message?: unknown }
@@ -332,135 +335,11 @@ export async function importPdf(
       const msg = typeof err?.message === 'string' ? err.message : String(e)
       console.error(`[pdf] page ${i} failed:`, tag, msg)
       warnings.push(`第 ${i} 页解析失败，已跳过`)
+      pageStarts.push(text.length)
     }
   }
 
-  // 注意：这里**不能**销毁 task —— 扫描版回退还要用同一个 doc 渲染位图。
-  // 提前 destroy 会拆掉 WorkerTransport，后续 getPage 抛 null.sendWithPromise。
-  // 真正的销毁点在下方两个出口。
-
-  if (looksScanned(totalChars, numPages)) {
-    // —— V6.1：扫描版回退到「按页位图」通道，不再拒收 ——
-    // 文字管线拿不到内容，但用户仍然想读：把每页 render 成 dataURL，
-    // 由 ReaderPage 走"图像翻页"分支。Node 单测（无 DOM canvas）走不到这里，
-    // 由 looksScanned 之外的逻辑报错。
-    onProgress?.({ phase: '检测到扫描版，开始按页转图片', current: 0, total: numPages })
-    const pageImages: Array<{ dataUrl: string; width: number; height: number }> = []
-
-    // 浏览器专属：pdf.js 的 page.render 期望 canvasContext.canvas 是真实 HTMLCanvasElement
-    // （jsdom 下 getContext('2d') 是 null）。Node 端没有 document，直接走不到这里。
-    if (
-      typeof globalThis.document === 'undefined' ||
-      typeof globalThis.document.createElement !== 'function'
-    ) {
-      // Node 单测环境：没有 canvas，渲染不了 —— 先销毁 task 再报错（避免漏 worker）
-      try {
-        await task.destroy()
-      } catch {
-        /* 忽略销毁异常 */
-      }
-      throw new ImportError(
-        '这个 PDF 没有可提取的文字',
-        '它可能是扫描版（整页是图片）。本功能需要在浏览器环境使用（npm run dev → localhost:5173）；' +
-          '命令行 / 单测环境没有 canvas，无法把页面渲染成图片。请在浏览器里导入。',
-      )
-    }
-
-    // 元信息必须在 destroy 之前取（destroy 后 WorkerTransport 已拆，静默拿不到）
-    const meta = await doc.getMetadata().catch(() => ({}))
-
-    try {
-      for (let i = 1; i <= numPages; i++) {
-        onProgress?.({ phase: '渲染扫描页', current: i, total: numPages })
-        let page: PdfPage | null = null
-        try {
-          page = await doc.getPage(i)
-          // 位图源分辨率：用户可用 Ctrl+滚轮/＋ 控件放大到最高 ×4 ——
-          // 源图必须留出放大余量，否则放大后字迹发虚（V6.1 用户反馈"更看不清"）。
-          // 基准 scale 3（A4 宽 ~595pt → 1786px），放大 ×4 时显示 7144px 仍有效。
-          const viewport = page.getViewport({ scale: 3.0 })
-          // 不让任何一页超过 MAX_DIM，避免个别超大页（图表 / 海报）撑爆内存；
-          // 同时限制单页 dataURL 体积（IndexedDB 单条记录不宜过大）。
-          const MAX_DIM = 3000
-          const scaleDown = Math.min(1, MAX_DIM / Math.max(viewport.width, viewport.height))
-          const finalScale = viewport.scale * scaleDown
-          const finalViewport = page.getViewport({ scale: finalScale })
-
-          const canvas = globalThis.document.createElement('canvas')
-          canvas.width = Math.ceil(finalViewport.width)
-          canvas.height = Math.ceil(finalViewport.height)
-          const ctx = canvas.getContext('2d')
-          if (!ctx) {
-            throw new ImportError(`第 ${i} 页：无法创建 canvas 2d 上下文`)
-          }
-
-          // pdf.js v6 RenderParameters：只传 canvasContext + viewport 即可，
-          // canvas 字段会自动用 canvasContext.canvas；多传反而被拒。
-          await page.render({ canvasContext: ctx, viewport: finalViewport } as never).promise
-          pageImages.push({
-            dataUrl: canvas.toDataURL('image/jpeg', 0.85),
-            width: canvas.width,
-            height: canvas.height,
-          })
-        } catch (e) {
-          // 把这一页的真实错误抛出去 —— wasm 404 / 字体解码失败 / canvas 不支持
-          // 都不再被吞为"环境不支持"。Node 在 fallback 即使失败也会逐级上报 console。
-          const err = e as { name?: unknown; message?: unknown; stack?: unknown }
-          const name = typeof err?.name === 'string' ? err.name : ''
-          const msg = typeof err?.message === 'string' ? err.message : String(e)
-          console.error(`[pdf] 扫描页 ${i} 渲染失败:`, name, msg, '|', err?.stack ? String(err.stack).slice(0, 400) : '')
-          throw new ImportError(
-            `扫描版第 ${i} 页渲染失败`,
-            `原因：${name || 'Error'} — ${msg.slice(0, 120)}。可重试一次；若仍失败请告知作者。`,
-          )
-        }
-      }
-    } finally {
-      // 文本通道 + 扫描渲染通道都结束后才销毁 —— 全文件唯一的常规销毁点。
-      // 不销毁则每次导入都会留下一个 pdf.js worker 及其页面缓存。
-      try {
-        await task.destroy()
-      } catch {
-        /* 忽略销毁异常 */
-      }
-    }
-
-    if (pageImages.length === 0) {
-      // 兜底；按上面的 throw 路径，正常不会到这里
-      throw new ImportError(
-        '这个 PDF 没有可提取的文字',
-        '它可能是扫描版（整页是图片）。请先用 OCR 工具转成文字或 EPUB 后再导入',
-      )
-    }
-
-    const info = meta && 'info' in meta && meta.info && typeof meta.info === 'object' ? meta.info as { Title?: unknown; Author?: unknown } : {}
-    const title = metaString(info.Title) || fallbackTitle
-    const author = metaString(info.Author) || undefined
-    return {
-      title,
-      text: '',
-      format: 'pdf',
-      tocEntries: pageTocEntries(pageImages.map((_, i) => i)),
-      author,
-      warnings: [
-        '该 PDF 是扫描版（文字层为空），已切换为图片阅读模式；搜索 / 划线 / 朗读不可用',
-      ],
-      scannedPages: pageImages,
-    }
-  }
-
-  const text = parts.join('\n\n')
-  if (!text.trim()) {
-    // 非扫描版但抽不到正文（如加密页或空 PDF）—— 销毁 task 再报错，避免漏 worker
-    try {
-      await task.destroy()
-    } catch {
-      /* 忽略销毁异常 */
-    }
-    throw new ImportError('这个 PDF 没有可提取的文字')
-  }
-
-  // 元信息
+  // 元信息（在销毁之前取）
   let title = fallbackTitle
   let author: string | undefined
   try {
@@ -473,14 +352,26 @@ export async function importPdf(
     /* 元信息缺失不影响导入 */
   }
 
-  // 正常文本出口：用完即销毁，避免 pdf.js worker 长留
+  // 用完即销毁，避免 pdf.js worker 长留（原版渲染会在阅读页另开一个解析器）
   try {
     await task.destroy()
   } catch {
     /* 忽略销毁异常 */
   }
 
-  if (warnings.length > 0) {
+  if (numPages === 0) {
+    throw new ImportError('这个 PDF 一页都没有', '文件可能已损坏，建议重新下载后再导入')
+  }
+
+  // 有文字层：文本可读、可搜、可划线；无文字层（扫描版）：只保留原版渲染通路。
+  // 判定用 looksScanned（每页 < 20 字）而不仅是"有没有字符"——
+  // 只有页眉页脚的扫描件也算扫描版，文字能力对它没有意义。
+  const hasText = text.trim().length > 0
+  if (!hasText) {
+    warnings.push('这个 PDF 没有文字层（扫描版），搜索 / 划线 / 朗读不可用；已按原版页面显示')
+  } else if (looksScanned(totalChars, numPages)) {
+    warnings.push('这个 PDF 几乎没有文字层（可能整页是图片），搜索 / 划线 / 朗读可能不可用；可切到文字视图查看')
+  } else if (warnings.length > 0) {
     warnings.push(`共 ${numPages} 页，${warnings.length} 页未能解析`)
   }
 
@@ -488,8 +379,12 @@ export async function importPdf(
     title,
     text,
     format: 'pdf',
-    tocEntries: chooseToc(text, pageStarts),
+    // 有文字层时优先章节目录（>= 2 章），否则回退"第 N 页"——两处都用同一份页码表；
+    // 没有文字层（扫描版）只有页码表可用
+    tocEntries: hasText ? chooseToc(text, pageStarts) : pageTocEntries(pageStarts),
     author,
     warnings,
+    pdfPageStarts: pageStarts,
+    hasText,
   }
 }

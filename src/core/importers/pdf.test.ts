@@ -259,15 +259,16 @@ describe('importPdf（真实样本）', () => {
     await expect(importPdf(load('sample-encrypted.pdf'), 'x')).rejects.not.toThrow('扫描')
   })
 
-  it('sample-scan-only.pdf：真实扫描版 → Node 下报"环境不支持渲染 + 提醒到浏览器使用"', async () => {
-    // Vitest 在 Node 下没有 DOM canvas，扫描版回退会显式抛错（V6.1 第一版 fallback），
-    // 该测试证明：扫描版 PDF 不会被误判成"PDF 解析失败"，提示也明确指向浏览器使用。
-    // 在浏览器里走通后，这条路径上的 pageImages.length > 0，是 V6.1 的目标产物。
-    await expect(importPdf(load('sample-scan-only.pdf'), 'x')).rejects.toMatchObject({
-      name: 'ImportError',
-      message: expect.stringContaining('没有可提取的文字'),
-      hint: expect.stringContaining('浏览器'),
-    })
+  it('sample-scan-only.pdf：真实扫描版 → 导入成功，标记无文字层 + 给出页码表', async () => {
+    // V6.2 起扫描版不再拒收、也不再依赖导入期 canvas：文字层为空，
+    // hasText=false，页面位图由阅读页按需从原件渲染（Node 下不跑渲染，只验导入结果）。
+    const r = await importPdf(load('sample-scan-only.pdf'), '扫描样本')
+    expect(r.format).toBe('pdf')
+    expect(r.text.trim()).toBe('')
+    expect(r.hasText).toBe(false)
+    expect(r.pdfPageStarts).toEqual([0]) // 1 页
+    expect(r.tocEntries).toEqual([{ title: '第 1 页', charIndex: 0 }])
+    expect(r.warnings.join()).toContain('没有文字层')
   })
 
   it('损坏的 PDF → 报 "PDF 解析失败" 且给"重新下载"建议', async () => {

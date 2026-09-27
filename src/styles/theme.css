@@ -329,16 +329,16 @@ button {
 }
 
 /*
- * 扫描版 PDF（V6.1）位图页：整页是一张图，高度可达千余 px，需要滚动才能看全。
+ * PDF「原版页面」视图（V6.2）：整页是一张位图，高度可达千余 px，需要滚动才能看全。
  * .page-content 的 absolute + top/bottom:0 + overflow:hidden 是分页模式的"固定一页"
  * 布局，会把位图钳在视口高度里 —— 底部沉到悬浮进度条下面且无法滚出。
- * .scan-page 解除钳制：文档流内自然生长，滚动交给 .page-viewport.scan-mode。
+ * .pdf-page 解除钳制：文档流内自然生长，滚动交给 .page-viewport.pdf-mode。
  */
-.page-content.scan-page {
+.page-content.pdf-page {
   position: static;
   bottom: auto;
   overflow: visible;
-  /* 位图在内容区里居中（.scan-image 的 auto margin 生效）；
+  /* 位图在内容区里居中（.pdf-image 的 auto margin 生效）；
    * 上下内边距同时是"悬浮工具栏预留"，与 JS 侧 scanBoxFromViewport 量的是同一组值 */
   max-width: none;
   margin: 0;
@@ -346,19 +346,19 @@ button {
 }
 
 /*
- * 扫描版位图：显示尺寸由 core/scanView 等比算出后写成 width/height 内联样式，
+ * 原版位图：显示尺寸由 core/scanView 等比算出后写成 width/height 内联样式，
  * 因此这里一律不设 max-width / max-height —— 只要留一条钳制规则，
  * 浏览器就会在"已定宽"的前提下单独压低高度，把整页压成横向条纹（字体变形）。
  * 这里只负责居中与不拉伸（width/height 已同比例，object-fit 不会触发二次缩放）。
  */
-.page-content.scan-page .scan-image {
+.page-content.pdf-page .pdf-image {
   display: block;
   margin: 0 auto;
   object-fit: contain;
 }
 
-/* 扫描版：位图可大于视口，滚动条交给视口本身（横向 + 纵向都能滚） */
-.page-viewport.scan-mode {
+/* 原版视图：位图可大于视口，滚动条交给视口本身（横向 + 纵向都能滚） */
+.page-viewport.pdf-mode {
   overflow: auto;
   overscroll-behavior: contain;
 }

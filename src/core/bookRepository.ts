@@ -42,6 +42,12 @@ export interface BookRecord {
   language?: string
   /** V6.1：扫描版 PDF 标记 —— content= '', 位图存 pdfPages store，阅读页走图片模式 */
   scanned?: boolean
+  /** V6.2：该 PDF 带原版页面位图（阅读页可显示"原来的样子"） */
+  pdfOriginal?: boolean
+  /** V6.2：原版页数（位图张数），书库按页显示进度 */
+  pdfPageCount?: number
+  /** V6.2：第 i 页文字在 content 中的起始偏移，页码 ↔ 字符偏移换算用（见 core/pdfNav.ts） */
+  pdfPageStarts?: number[]
 }
 
 export interface ProgressRecord {
@@ -86,6 +92,10 @@ export interface LibraryEntry {
   author?: string
   /** V6.1：扫描版 PDF（位图存于 pdfPages，content 为空） */
   scanned?: boolean
+  /** V6.2：该 PDF 带原版页面位图 */
+  pdfOriginal?: boolean
+  /** V6.2：原版页数（书库按页显示进度） */
+  pdfPageCount?: number
 }
 
 interface XifengDB extends DBSchema {
@@ -102,8 +112,11 @@ interface XifengDB extends DBSchema {
     value: HighlightRecord
     indexes: { 'by-book': string }
   }
-  /** V6.1：扫描版 PDF 的按页位图。一书的全部页存在 same bookId 下，避免 books 行变肥。 */
+  /** V6.1/V6.2：PDF 按页位图（旧记录：导入时已渲染好的页面）。 */
   pdfPages: { key: [string, number]; value: PdfPageRecord }
+  /** V6.2：PDF 原始文件字节。存原件而不是预渲染位图：存储 ≈ 原文件大小，
+   *  阅读时按需渲染，放大到多少倍都能重新按目标分辨率画（字迹不糊）。 */
+  pdfFiles: { key: string; value: PdfFileRecord }
 }
 
 /** V6.1 扫描版 PDF 一页的位图。key 用 [bookId, page] 展开，便于读当前页/全删/遍历。 */
@@ -116,8 +129,17 @@ export interface PdfPageRecord {
   dataUrl: string
 }
 
+/** V6.2 PDF 原件：整份文件字节，阅读时按需渲染原版页。 */
+export interface PdfFileRecord {
+  bookId: string
+  /** 原始 PDF 文件字节（含 xref/trailer，pdf.js 可直接解析） */
+  bytes: ArrayBuffer
+  /** 文件大小（字节），用于书库展示与存储占用提示 */
+  size: number
+}
+
 const DB_NAME = 'xifeng-reader'
-const DB_VERSION = 5
+const DB_VERSION = 6
 
 let dbPromise: Promise<IDBPDatabase<XifengDB>> | null = null
 
@@ -143,11 +165,17 @@ function getDB(): Promise<IDBPDatabase<XifengDB>> {
         if (oldVersion < 5) {
           // V6.1：扫描版 PDF 的位图按页存放。keyPath 用 [bookId, page] 复合键，
           // 便于按书快速清空；by-book 索引支持任意字符串 bookId。
+          // 保留该 store：老库里的位图仍可读（新导入的 PDF 走 pdfFiles 原件通道）。
           const store = db.createObjectStore('pdfPages', { keyPath: ['bookId', 'page'] })
           ;(store as { createIndex(name: string, keyPath: string | string[]): unknown }).createIndex(
             'by-book',
             'bookId',
           )
+        }
+        if (oldVersion < 6) {
+          // V6.2：PDF 原件（整份字节）。阅读时按需渲染原版页 ——
+          // 存原件而非预渲染位图：占用 ≈ 原文件大小，放大后可重新高清渲染。
+          db.createObjectStore('pdfFiles', { keyPath: 'bookId' })
         }
       },
     })
@@ -160,18 +188,37 @@ export async function addBook(book: BookRecord): Promise<void> {
   await db.put('books', book)
 }
 
-/** V6.1：保存/覆盖一本书的扫描页（content 仍写 ''，把位图放 pdfPages store）。 */
-export async function addScannedBook(
+/**
+ * V6.2：保存一本书及其 PDF 原件（同一个事务，避免"书在、原件缺失"的半截状态）。
+ * `book.pdfOriginal` 由本函数按实际存储结果写定（存不下就不标记），
+ * 返回是否真的存了原件 —— 无原件的 PDF 只能显示文字视图。
+ */
+export async function addBookWithPdf(
   book: BookRecord,
-  pages: Array<Omit<PdfPageRecord, 'bookId'>>,
-): Promise<void> {
+  pdf: { bytes: ArrayBuffer; size: number } | null,
+): Promise<boolean> {
   const db = await getDB()
-  const tx = db.transaction(['books', 'pdfPages'], 'readwrite')
-  await tx.objectStore('books').put(book)
-  for (const p of pages) {
-    await tx.objectStore('pdfPages').put({ ...p, bookId: book.id })
+  const tx = db.transaction(['books', 'pdfFiles'], 'readwrite')
+  const hasOriginal = !!(pdf && pdf.bytes.byteLength > 0)
+  const record: BookRecord = { ...book }
+  if (hasOriginal) record.pdfOriginal = true
+  else delete record.pdfOriginal
+  await tx.objectStore('books').put(record)
+  if (hasOriginal && pdf) {
+    await tx.objectStore('pdfFiles').put({ bookId: book.id, bytes: pdf.bytes, size: pdf.size })
+  } else {
+    // 没带原件：清掉可能残留的旧原件，保持"记录与存储"一致
+    await tx.objectStore('pdfFiles').delete(book.id)
   }
   await tx.done
+  return hasOriginal
+}
+
+/** V6.2：取一本书的 PDF 原件字节；没有则 undefined。 */
+export async function getPdfFile(bookId: string): Promise<ArrayBuffer | undefined> {
+  const db = await getDB()
+  const rec = await db.get('pdfFiles', bookId)
+  return rec?.bytes
 }
 
 export async function getBook(id: string): Promise<BookRecord | undefined> {
@@ -206,6 +253,8 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
         cover: b.cover,
         author: b.author,
         scanned: b.scanned,
+        pdfOriginal: b.pdfOriginal,
+        pdfPageCount: b.pdfPageCount,
       })
     cursor = await cursor.continue()
   }
@@ -227,17 +276,18 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
 
 export async function deleteBook(id: string): Promise<void> {
   const db = await getDB()
-  const tx = db.transaction(['books', 'progress', 'pdfPages'], 'readwrite')
+  const tx = db.transaction(['books', 'progress', 'pdfPages', 'pdfFiles'], 'readwrite')
   await Promise.all([
     tx.objectStore('books').delete(id),
     tx.objectStore('progress').delete(id),
-    // 扫描页的位图一并清掉，避免删书后 IndexedDB 还残留长尾存储
+    // 原版页/原件一并清掉，避免删书后 IndexedDB 还残留长尾存储
     deletePdfPagesFromStore(id, tx.objectStore('pdfPages') as IDBPObjectStore<XifengDB, ['pdfPages'], 'pdfPages', 'readwrite'>),
+    tx.objectStore('pdfFiles').delete(id),
     tx.done,
   ])
 }
 
-/** 整本的扫描页取出（按页码升序）。 */
+/** 整本的原版页位图（按页码升序）。大文件慎用 —— 阅读页请用 getPdfPage 按页取。 */
 export async function listPdfPages(bookId: string): Promise<PdfPageRecord[]> {
   const db = await getDB()
   // idb 在 composite keyPath（[bookId, page]）上对 index 查询的泛型推断有问题，绕开它即可
@@ -250,7 +300,19 @@ export async function listPdfPages(bookId: string): Promise<PdfPageRecord[]> {
   return list.sort((a, b) => a.page - b.page)
 }
 
-/** 写入整本扫描页（清空旧的后再写），由导入器在扫描版分支调用。 */
+/**
+ * 取一本书某一页的原版位图（0-based 页号）。
+ * 按页读而非整本读：几十 MB 的位图整本放进内存会同时压垮内存与首帧 ——
+ * 阅读页只留当前页 + 相邻页的预热缓存。
+ */
+export async function getPdfPage(bookId: string, page: number): Promise<PdfPageRecord | undefined> {
+  const db = await getDB()
+  const tx = db.transaction('pdfPages')
+  // 复合主键 [bookId, page]，直接用主键 get，无需走索引
+  return await tx.store.get([bookId, page])
+}
+
+/** 写入整本原版页位图（清空旧的后再写），由导入器调用。 */
 export async function setPdfPages(
   bookId: string,
   pages: Array<Omit<PdfPageRecord, 'bookId'>>,
@@ -264,7 +326,7 @@ export async function setPdfPages(
   await tx.done
 }
 
-/** 删除某本书的全部扫描页。 */
+/** 删除某本书的全部原版页位图。 */
 export async function deletePdfPages(bookId: string): Promise<void> {
   const db = await getDB()
   const tx = db.transaction('pdfPages', 'readwrite')
@@ -478,11 +540,14 @@ export interface BackupData {
   stats: DayStatRecord[]
   highlights: HighlightRecord[]
   settings: unknown | null
+  /** V6.3：PDF 原件（base64）。缺省表示这份备份不含原件，导入后 PDF 只能看文字。 */
+  pdfFiles?: Array<{ bookId: string; bytes: string; size: number }>
 }
 
-/** 导出全量备份（含正文）。 */
+/** 导出全量备份（含正文；PDF 原件以 base64 一并带上）。 */
 export async function exportBackup(settings: unknown): Promise<BackupData> {
   const db = await getDB()
+  const files = await db.getAll('pdfFiles')
   return {
     app: 'xifeng-reader',
     version: 1,
@@ -493,6 +558,11 @@ export async function exportBackup(settings: unknown): Promise<BackupData> {
     stats: await db.getAll('stats'),
     highlights: await db.getAll('highlights'),
     settings,
+    pdfFiles: files.map((f) => ({
+      bookId: f.bookId,
+      bytes: encodeBytesToBase64(f.bytes),
+      size: f.size,
+    })),
   }
 }
 
@@ -502,6 +572,7 @@ export interface ImportReport {
   bookmarks: number
   stats: number
   highlights: number
+  pdfFiles: number
 }
 
 /** 导入备份（按 id 覆盖合并），返回各类记录的导入数量。 */
@@ -510,7 +581,10 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
     throw new Error('不是有效的 xifeng 阅读备份文件')
   }
   const db = await getDB()
-  const tx = db.transaction(['books', 'progress', 'bookmarks', 'stats', 'highlights'], 'readwrite')
+  const tx = db.transaction(
+    ['books', 'progress', 'bookmarks', 'stats', 'highlights', 'pdfFiles'],
+    'readwrite',
+  )
   for (const b of data.books ?? []) await tx.objectStore('books').put(b)
   for (const p of data.progress ?? []) await tx.objectStore('progress').put(p)
   for (const b of data.bookmarks ?? []) {
@@ -522,6 +596,15 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
   for (const h of data.highlights ?? []) {
     if (h && h.id && h.bookId != null) await tx.objectStore('highlights').put(h)
   }
+  // V6.3：PDF 原件随备份走（base64 字符串 → 还原成 ArrayBuffer）。
+  // 老备份没有该字段，或某本书没带原件 —— 都不算错误，只是那本仍需重新导入。
+  let pdfFiles = 0
+  for (const p of data.pdfFiles ?? []) {
+    const bytes = decodeBase64ToBytes(p?.bytes)
+    if (!p || !p.bookId || !bytes) continue
+    await tx.objectStore('pdfFiles').put({ bookId: p.bookId, bytes, size: p.size ?? bytes.byteLength })
+    pdfFiles++
+  }
   await tx.done
   return {
     books: data.books?.length ?? 0,
@@ -529,7 +612,33 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
     bookmarks: data.bookmarks?.length ?? 0,
     stats: data.stats?.length ?? 0,
     highlights: data.highlights?.length ?? 0,
+    pdfFiles,
   }
+}
+
+/** base64 → ArrayBuffer（备份里的 PDF 原件）。非法输入返回 null。 */
+function decodeBase64ToBytes(b64: unknown): ArrayBuffer | null {
+  if (typeof b64 !== 'string' || !b64) return null
+  try {
+    const bin = atob(b64)
+    const out = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+    return out.buffer
+  } catch {
+    return null
+  }
+}
+
+/** ArrayBuffer → base64（导出备份时用）。 */
+function encodeBytesToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let bin = ''
+  // 分块拼接：一次 apply 百万级参数会爆栈
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
 }
 
 /** 返回已保存的阅读位置（字符偏移）；没有记录时返回 null。 */
