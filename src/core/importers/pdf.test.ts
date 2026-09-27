@@ -259,18 +259,14 @@ describe('importPdf（真实样本）', () => {
     await expect(importPdf(load('sample-encrypted.pdf'), 'x')).rejects.not.toThrow('扫描')
   })
 
-  it('sample-scan-only.pdf：真实扫描版 → 走图片分支（不报错、不带文字、warnings 提示扫描版）', async () => {
-    // 该 fixture 是从真实扫描版 PDF 抽出的 1 页，pdf.js 的 getTextContent 会返回空 items；
-    // 在浏览器环境下应进入 V6.1 的扫描版回退分支（page.render → scannedPages）。
-    // 但 Vitest 跑在 Node（没有 DOM canvas）， render 会走到 "无 canvas" 分支，
-    // 最后等价于"扫描版且无法在位图模式下渲染"——提示用户走 OCR。
-    // 这条断言同时证明：
-    //   1) importPdf 确实把样本判成 scanned（不会先抛"PDF 解析失败"）
-    //   2) 当 scannedPages 为空时按预期 throw "OCR 建议"，而不是把空内容吞掉
+  it('sample-scan-only.pdf：真实扫描版 → Node 下报"环境不支持渲染 + 提醒到浏览器使用"', async () => {
+    // Vitest 在 Node 下没有 DOM canvas，扫描版回退会显式抛错（V6.1 第一版 fallback），
+    // 该测试证明：扫描版 PDF 不会被误判成"PDF 解析失败"，提示也明确指向浏览器使用。
+    // 在浏览器里走通后，这条路径上的 pageImages.length > 0，是 V6.1 的目标产物。
     await expect(importPdf(load('sample-scan-only.pdf'), 'x')).rejects.toMatchObject({
       name: 'ImportError',
       message: expect.stringContaining('没有可提取的文字'),
-      hint: expect.stringContaining('OCR'),
+      hint: expect.stringContaining('浏览器'),
     })
   })
 

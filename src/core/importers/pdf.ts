@@ -51,9 +51,9 @@ interface PdfTextContent {
 
 interface PdfPage {
   getTextContent(): Promise<PdfTextContent>
-  /** pdf.js 渲染管线：把当前页画到提供的 canvas 上。 */
+  /** pdf.js 渲染管线：把当前页画到提供的 canvasContext 上。 */
   getViewport(opts: { scale: number }): { width: number; height: number; scale: number }
-  render(opts: { canvas?: unknown; canvasContext?: unknown; viewport: unknown }): { promise: Promise<unknown> }
+  render(opts: { canvasContext?: unknown; viewport: unknown }): { promise: Promise<unknown> }
 }
 
 interface PdfMetadata {
@@ -332,9 +332,23 @@ export async function importPdf(
     // 由 looksScanned 之外的逻辑报错。
     onProgress?.({ phase: '检测到扫描版，开始按页转图片', current: 0, total: numPages })
     const pageImages: Array<{ dataUrl: string; width: number; height: number }> = []
-    const renderErrors: string[] = []
-    for (let i = 1; i <= numPages; i++) {
-      try {
+
+    // 浏览器专属：pdf.js 的 page.render 期望 canvasContext.canvas 是真实 HTMLCanvasElement
+    // （jsdom 下 getContext('2d') 是 null）。Node 端没有 document，直接走不到这里。
+    if (
+      typeof globalThis.document === 'undefined' ||
+      typeof globalThis.document.createElement !== 'function'
+    ) {
+      throw new ImportError(
+        '这个 PDF 没有可提取的文字',
+        '它可能是扫描版（整页是图片）。本功能需要在浏览器环境使用（npm run dev → localhost:5173）；' +
+          '命令行 / 单测环境没有 canvas，无法把页面渲染成图片。请在浏览器里导入。',
+      )
+    }
+
+    try {
+      for (let i = 1; i <= numPages; i++) {
+        onProgress?.({ phase: '渲染扫描页', current: i, total: numPages })
         const page = await doc.getPage(i)
         const viewport = page.getViewport({ scale: 2.0 })
         // 用小尺寸即可保证阅读清晰：A4 页面宽度 ~595pt，scale 2 → 1190px，足够 1080p 屏。
@@ -343,46 +357,41 @@ export async function importPdf(
         const scaleDown = Math.min(1, MAX_DIM / Math.max(viewport.width, viewport.height))
         const finalScale = viewport.scale * scaleDown
         const finalViewport = page.getViewport({ scale: finalScale })
-        const canvas: HTMLCanvasElement | null =
-          globalThis.document && typeof globalThis.document.createElement === 'function'
-            ? globalThis.document.createElement('canvas')
-            : null
-        if (!canvas) {
-          // Node 端：没有 DOM 环境，跳过该页 —— 单测会从 scannedPages.length === 0 上看到
-          renderErrors.push(`第 ${i} 页：当前环境不支持图像渲染`)
-          continue
-        }
+
+        const canvas = globalThis.document.createElement('canvas')
         canvas.width = Math.ceil(finalViewport.width)
         canvas.height = Math.ceil(finalViewport.height)
         const ctx = canvas.getContext('2d')
         if (!ctx) {
-          renderErrors.push(`第 ${i} 页：无法创建 canvas 2d 上下文`)
-          continue
+          throw new ImportError(`第 ${i} 页：无法创建 canvas 2d 上下文`)
         }
-        // pdf.js v6 的 RenderParameters 接受 canvas / canvasContext 二选一；
-        // 浏览器下传 canvas + canvasContext 都可以，传 canvas 更直接。
-        await page.render({ canvas, canvasContext: ctx, viewport: finalViewport } as never).promise
+
+        // pdf.js v6 RenderParameters：只传 canvasContext + viewport 即可，
+        // canvas 字段会自动用 canvasContext.canvas；多传反而被拒。
+        await page.render({ canvasContext: ctx, viewport: finalViewport } as never).promise
         pageImages.push({
           dataUrl: canvas.toDataURL('image/jpeg', 0.85),
           width: canvas.width,
           height: canvas.height,
         })
-        onProgress?.({ phase: '渲染扫描页', current: i, total: numPages })
-      } catch (e) {
-        const err = e as { message?: unknown }
-        const msg = typeof err?.message === 'string' ? err.message : String(e)
-        renderErrors.push(`第 ${i} 页渲染失败：${msg.slice(0, 60)}`)
-      } finally {
-        onProgress?.({ phase: '渲染扫描页', current: i, total: numPages })
+      }
+    } finally {
+      // 与文本通道一致：每本书用完即销毁，避免 pdf.js worker 长留。
+      try {
+        await task.destroy()
+      } catch {
+        /* 忽略销毁异常 */
       }
     }
+
     if (pageImages.length === 0) {
-      // 所有页都失败 / Node 环境没 canvas —— 兜底报错，等价于原 scanned 分支
+      // 兜底；按上面的 throw 路径，正常不会到这里
       throw new ImportError(
         '这个 PDF 没有可提取的文字',
-        '它可能是扫描版（整页是图片）。当前环境不支持把页面渲染成图片，请先用 OCR 工具转成文字或 EPUB 后再导入',
+        '它可能是扫描版（整页是图片）。请先用 OCR 工具转成文字或 EPUB 后再导入',
       )
     }
+
     const meta = await doc.getMetadata().catch(() => ({}))
     const info = meta && 'info' in meta && meta.info && typeof meta.info === 'object' ? meta.info as { Title?: unknown; Author?: unknown } : {}
     const title = metaString(info.Title) || fallbackTitle
@@ -395,7 +404,6 @@ export async function importPdf(
       author,
       warnings: [
         '该 PDF 是扫描版（文字层为空），已切换为图片阅读模式；搜索 / 划线 / 朗读不可用',
-        ...renderErrors,
       ],
       scannedPages: pageImages,
     }
