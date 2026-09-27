@@ -71,6 +71,12 @@ import ReaderMenu, { type MenuTab } from './ReaderMenu'
 import { EditCard, SelToolbar, type SelInfo } from './Annotator'
 import { TranslateCard, type TranslateState } from './Translator'
 import { isWordLookup, TranslateError, translateText } from '../core/translate'
+import {
+  HOVER_POLL_MS,
+  isSignificantMove,
+  shouldAutoDismissHover,
+  type Point,
+} from '../core/dismiss'
 
 /**
  * 按行切段：与正文渲染共用同一规则（V1.3 排版基础）。
@@ -188,6 +194,14 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
    * 所以必须在这里单独留一份 —— 否则「存为想法」拿不到字符区间，只能干瞪眼。
    */
   const translateSelRef = useRef<SelInfo | null>(null)
+  /** V6.5：浮卡出现时刻与指针轨迹，用于"鼠标移到别处就自动收起" */
+  const translateShownAtRef = useRef(0)
+  const pointerRef = useRef<{ pos: Point; lastMoveAt: number | null }>({
+    pos: { x: -1, y: -1 },
+    lastMoveAt: null,
+  })
+  /** 浮卡 DOM：判断指针是否停在卡内（含按钮） */
+  const translateCardRef = useRef<HTMLDivElement>(null)
   /** 点开的批注编辑卡：命中的批注（可能多条重叠）+ 当前查看索引 */
   const [editState, setEditState] = useState<{ ids: string[]; index: number } | null>(null)
   /** 跳转定位后闪烁高亮的批注 id */
@@ -232,6 +246,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   } | null>(null)
   /** 从原版切到文字视图时要滚到的字符偏移（滚动模式下靠它定位，不回到开头） */
   const pendingTextAnchorRef = useRef<number | null>(null)
+  /**
+   * V6.5：收起译文浮卡的函数镜像。
+   * 翻页 / 滚动 / 菜单等入口定义在 closeTranslate 之前，直接引用会踩 TDZ，
+   * 所以用 ref 转发（真实实现定义好后立刻赋值）。
+   */
+  const closeTranslateRef = useRef<() => void>(() => {})
   /** 点按判定：记录按下位置与时刻（V4.0 与批注点击共同依赖） */
   const mouseDownRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
@@ -422,6 +442,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const turn = useCallback(
     (dir: -1 | 1) => {
       setAutoPlaying(false)
+      // V6.5：翻页后旧译文对应的位置已经不在屏上了，直接收起
+      closeTranslateRef.current()
       if (showOriginal) {
         // 原版视图：按 PDF 页翻，进度写回同一个字符偏移坐标系
         const cur = pdfPageRef.current
@@ -460,6 +482,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const jumpToFraction = useCallback(
     (fraction: number) => {
       setAutoPlaying(false)
+      closeTranslateRef.current() // V6.5：位置变了，旧译文没意义
       if (showOriginal) {
         // 原版视图：进度条先映射到"字符偏移"（有换算表）或"页序"，再定位到对应页
         const nav = pdfNavRef.current
@@ -647,6 +670,9 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       const y = Math.max(sel.y, 120)
 
       translateSelRef.current = sel
+      translateShownAtRef.current = Date.now()
+      // 指针对照基准重置：以浮卡出现的这一刻为起点，之后才谈得上"移开"
+      pointerRef.current.lastMoveAt = null
       setSelInfo(null)
       setTranslate({ source: sel.text, x, y, result: null, error: null })
       // 选中的单词/短语：带上它所在的整句，供翻译层在词义退化时补语境
@@ -698,6 +724,58 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     translateAbortRef.current = null
     setTranslate(null)
   }, [])
+  // 回填镜像：上面那些入口（turn / 滚动 / 菜单）都通过它来收起浮卡
+  closeTranslateRef.current = closeTranslate
+
+  /** V6.5：译文浮卡的开合也走 ref 镜像 —— 事件监听里读 state 会拿到过期值。 */
+  const translateOpenRef = useRef(false)
+  useEffect(() => {
+    translateOpenRef.current = translate != null
+  }, [translate])
+
+  /** 指针是否停在浮卡内部（含按钮）；卡还没挂上时视为"不在卡内"。 */
+  const isPointerInsideCard = useCallback((p: Point): boolean => {
+    const el = translateCardRef.current
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    return p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom
+  }, [])
+
+  /**
+   * V6.5：鼠标移到别处并停下 → 自动收起译文浮卡（不用再点 ✕）。
+   * 两个来源一起判定：指针移动（记"最后一次显著移动的时刻"）+ 定时轮询
+   * （"停下 500ms"本身是时间条件，光靠事件触发不了）。
+   * 判定逻辑在 core/dismiss.ts，纯函数、可单测。
+   */
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const now = Date.now()
+      const pos = { x: e.clientX, y: e.clientY }
+      const prev = pointerRef.current
+      if (isSignificantMove(prev.pos, pos)) {
+        prev.lastMoveAt = now
+        prev.pos = pos
+      } else {
+        prev.pos = pos
+      }
+    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    const timer = window.setInterval(() => {
+      if (!translateOpenRef.current) return
+      const inside = isPointerInsideCard(pointerRef.current.pos)
+      const shouldClose = shouldAutoDismissHover({
+        shownAt: translateShownAtRef.current,
+        now: Date.now(),
+        lastMoveAt: pointerRef.current.lastMoveAt,
+        pointerInside: inside,
+      })
+      if (shouldClose) closeTranslate()
+    }, HOVER_POLL_MS)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.clearInterval(timer)
+    }
+  }, [closeTranslate, isPointerInsideCard])
 
   /** 新建标注（选色/选样式立即标注；写想法则先建后聚焦输入）。 */
   const createHighlight = useCallback(
@@ -802,6 +880,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   /** 选区 → 绝对字符区间；鼠标抬起时在选区旁给出标注工具栏。 */
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
+    // V6.5：在正文里按下鼠标 = 用户要去别处了（重新选字/翻页），先收起译文浮卡
+    closeTranslateRef.current()
     mouseDownRef.current = { x: e.clientX, y: e.clientY, t: Date.now() }
   }, [])
 
@@ -996,6 +1076,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const jumpToOffset = useCallback(
     (charIndex: number) => {
       const pm = pagemapRef.current
+      closeTranslateRef.current() // V6.5：跳到别处，旧译文作废
       if (showOriginal) {
         setAutoPlaying(false)
         jumpOriginalTo(charIndex)
@@ -1022,6 +1103,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   )
 
   const openMenu = useCallback((tab: MenuTab) => {
+    closeTranslateRef.current() // V6.5：菜单要占屏，避免与译文卡叠层
     setMenuTab(tab)
     setMenuOpen(true)
   }, [])
@@ -1359,6 +1441,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         void saveProgress(bookId, top)
       }
       if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) setExtraCount((c) => c + 2)
+      // V6.5：开始滚动 = 已经在往下读，浮卡挡着没意义
+      closeTranslateRef.current()
     },
     [bookId],
   )
@@ -1633,6 +1717,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
                 title={originalMode ? '切到文字视图（可搜索 / 划线）' : '切回原版页面（PDF 原来的样子）'}
                 onClick={() => {
                   const toText = originalMode
+                  closeTranslateRef.current() // V6.5：换视图后旧译文对不上
                   // 两边共用字符偏移坐标系：切换时把位置带过去，不回到开头
                   const pm = pagemapRef.current
                   if (toText) {
@@ -1704,6 +1789,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       {translate && (
         <TranslateCard
           state={translate}
+          cardRef={translateCardRef}
           onCopy={(text) => {
             void navigator.clipboard?.writeText(text)
             showToast('已复制译文')

@@ -5,7 +5,7 @@
  * 卡片贴在选区附近（位置由 ReaderPage 算好），不遮挡、不跳页；
  * 关闭即回到阅读，未保存的译文不写库（要留就用「存为想法」）。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { isWordLookup, splitWords, type TranslationResult } from '../core/translate'
 
 export interface TranslateState {
@@ -24,11 +24,14 @@ export interface TranslateState {
 
 export function TranslateCard({
   state,
+  cardRef,
   onSaveNote,
   onCopy,
   onClose,
 }: {
   state: TranslateState
+  /** V6.5：浮卡本体，供 ReaderPage 判断指针是否停在卡内 */
+  cardRef?: RefObject<HTMLDivElement>
   /** 把译文写进这条批注的想法（V4.0 的 note 字段） */
   onSaveNote: () => void
   onCopy: (text: string) => void
@@ -55,7 +58,7 @@ export function TranslateCard({
 
   return (
     <div
-      ref={ref}
+      ref={cardRef ?? ref}
       className="translate-card"
       style={{ left: state.x, top: state.y }}
       onMouseDown={(e) => e.stopPropagation()}

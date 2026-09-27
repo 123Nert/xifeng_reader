@@ -1,7 +1,7 @@
 # xifeng 阅读
 
 [![version](https://img.shields.io/github/v/tag/123Nert/xifeng_reader?label=version)](https://github.com/123Nert/xifeng_reader/tags)
-[![tests](https://img.shields.io/badge/tests-261%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-271%20passing-brightgreen)](src)
 [![PWA](https://img.shields.io/badge/PWA-ready-blueviolet)](vite.config.ts)
 
 本地电子书阅读器（Web 应用）。核心闭环：**导入一本书 → 舒服地读完 → 下次打开接着读**。
@@ -20,10 +20,20 @@
 - 主题：日间 / 护眼 / 夜间
 - 导航：章节目录（内置 + 自定义正则）、书签、全文搜索（页面内高亮）、划线笔记（可导出 Markdown，见 [V4.0 方案](docs/V4.0-批注与笔记方案.md)）
 - 划词翻译（V6.4）：选中英文即出中文（单词给义项 + 所在整句对照），可一键存为想法；目标语言可设（见 [V6.4 方案](docs/V6.4-划词翻译方案.md)）
+- 译文浮卡（V6.5）：**鼠标移到别处停下就自动收起**，不用再点 ✕；不动鼠标读译文时不会消失（见 [V6.5 方案](docs/V6.5-翻译浮卡自动消失方案.md)）
 - 进度自动保存，重新打开精确续读；进度条拖动跳转任意位置
 - PWA 可安装，离线可读；备份导出 / 导入（全量 JSON，含 PDF 原件）
 
 ## 当前版本
+
+**V6.5 译文浮卡自动收起** ✅
+
+- 查完一个词继续读时，**把鼠标移到别的段落停下，译文卡自动消失** —— 不必抬手点 ✕。
+- 判定由三条件共同决定（`core/dismiss.ts`，纯函数可测）：浮卡出现满 600ms、
+  指针真的移动过（≥12px）、停在卡外达 500ms；指针停在卡内或指针没动过都不会收起。
+- 点击正文 / 滚动 / 翻页 / 拖进度条 / 开菜单 / 切换原版·文字视图 → 同样立即收起。
+
+完整设计见 [docs/V6.5-翻译浮卡自动消失方案.md](docs/V6.5-翻译浮卡自动消失方案.md)。
 
 **V6.4 划词翻译** ✅
 
@@ -67,7 +77,8 @@
 
 | 版本 | 主题 | 标记 |
 | --- | --- | --- |
-| v6.4.0 | 划词翻译（英文→中文，含单词语境） | ✅ 当前 |
+| v6.5.0 | 译文浮卡自动收起（移开即消失） | ✅ 当前 |
+| v6.4.0 | 划词翻译（英文→中文，含单词语境） | ✅ |
 | v6.3.0 | 书架封面（每本书的第一页） | ✅ |
 | v6.2.0 | PDF 原版阅读（原文件入库 + 按需渲染 + 双视图） | ✅ |
 | v6.1.0 | 扫描版 PDF 按页位图阅读 | ✅ |
@@ -87,7 +98,7 @@
 ```bash
 npm install
 npm run dev        # 开发（http://localhost:5173）
-npm run test       # Vitest 单元测试（261 例）
+npm run test       # Vitest 单元测试（271 例）
 npm run build      # 产出纯静态文件到 dist/
 npm run preview    # 本地预览构建产物
 ```
@@ -122,6 +133,7 @@ src/
 │  ├─ pdfOriginal.ts         # PDF 原版页面按需渲染（清晰度/内存上限/取消）
 │  ├─ scanView.ts            # 位图等比显示几何（缩放不变形）
   ├─ translate.ts           # 划词翻译：方向判断/切分/缓存/单词兜底义
+  ├─ dismiss.ts             # 浮层"移开即收起"判定（三条件，纯函数）
 │  └─ settings.ts            # 阅读设置（localStorage + CSS 变量）
 └─ styles/theme.css          # CSS 变量主题（日间/护眼/夜间）
 ```
@@ -141,3 +153,4 @@ src/
 - [docs/V6.2-PDF原版阅读方案.md](docs/V6.2-PDF原版阅读方案.md) — 原文件入库 + 读时按需渲染 + 原版/文字双视图
 - [docs/V6.3-书架封面方案.md](docs/V6.3-书架封面方案.md) — 每本书的第一页当封面：各格式来源、排版规则与实测
 - [docs/V6.4-划词翻译方案.md](docs/V6.4-划词翻译方案.md) — 划词翻译：接口实测选型、单词翻译的坑与对策
+- [docs/V6.5-翻译浮卡自动消失方案.md](docs/V6.5-翻译浮卡自动消失方案.md) — 移开即收起的三条件判定与实测
