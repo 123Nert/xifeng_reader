@@ -23,6 +23,11 @@
  *   用户输入的密码，不含 "password" 字样）；按 message 匹配会漏判。
  *   另外：在 Vitest 下 pdf.js 抛的异常可能被跨 realm 结构化克隆，
  *   `e instanceof Error` 可能为 false —— 必须按 `err.name` 字符串判定，不能 instanceof。
+ * - **扫描版回退的销毁时序**：文字抽取通道结束时**不能**立刻 destroy loadingTask ——
+ *   扫描版还要用同一个 doc 逐页渲染位图；提前 destroy 会拆掉 WorkerTransport，
+ *   后续 `doc.getPage` 抛 `TypeError: Cannot read properties of null (reading 'sendWithPromise')`。
+ *   销毁统一推迟到扫描渲染通道结束（或 Node 无 canvas 的提前抛错之前）。
+ *   同理，扫描版的元信息（Title/Author）必须在 destroy 之前取，否则静默丢失。
  * - **`data` 必须传 slice 拷贝**：pdf.js `getDocument` 会把 `data.buffer`
  *   transfer 给 worker（即使是 fake worker 也会拆 buffer）—— 第二次再用同一个
  *   ArrayBuffer 会抛 `TypeError: Cannot perform Construct on a detached ArrayBuffer`。
@@ -309,36 +314,30 @@ export async function importPdf(
   let cursor = 0
   let totalChars = 0
 
-  try {
-    for (let i = 1; i <= numPages; i++) {
-      onProgress?.({ phase: '抽取文字', current: i, total: numPages })
-      pageStarts.push(cursor)
-      try {
-        const page = await doc.getPage(i)
-        const content = await page.getTextContent()
-        const text = assemblePageText(content.items ?? [])
-        if (text) {
-          parts.push(text)
-          cursor += text.length + 2
-          totalChars += text.length
-        }
-      } catch (e) {
-        const err = e as { name?: unknown; message?: unknown }
-        const tag = typeof err?.name === 'string' ? err.name : ''
-        const msg = typeof err?.message === 'string' ? err.message : String(e)
-        console.error(`[pdf] page ${i} failed:`, tag, msg)
-        warnings.push(`第 ${i} 页解析失败，已跳过`)
-      }
-    }
-  } finally {
-    // v6：销毁入口在 loadingTask 上（doc 上已没有 destroy），
-    // 不销毁则每次导入都会留下一个 pdf.js worker 及其页面缓存
+  for (let i = 1; i <= numPages; i++) {
+    onProgress?.({ phase: '抽取文字', current: i, total: numPages })
+    pageStarts.push(cursor)
     try {
-      await task.destroy()
-    } catch {
-      /* 忽略销毁异常 */
+      const page = await doc.getPage(i)
+      const content = await page.getTextContent()
+      const text = assemblePageText(content.items ?? [])
+      if (text) {
+        parts.push(text)
+        cursor += text.length + 2
+        totalChars += text.length
+      }
+    } catch (e) {
+      const err = e as { name?: unknown; message?: unknown }
+      const tag = typeof err?.name === 'string' ? err.name : ''
+      const msg = typeof err?.message === 'string' ? err.message : String(e)
+      console.error(`[pdf] page ${i} failed:`, tag, msg)
+      warnings.push(`第 ${i} 页解析失败，已跳过`)
     }
   }
+
+  // 注意：这里**不能**销毁 task —— 扫描版回退还要用同一个 doc 渲染位图。
+  // 提前 destroy 会拆掉 WorkerTransport，后续 getPage 抛 null.sendWithPromise。
+  // 真正的销毁点在下方两个出口。
 
   if (looksScanned(totalChars, numPages)) {
     // —— V6.1：扫描版回退到「按页位图」通道，不再拒收 ——
@@ -354,12 +353,21 @@ export async function importPdf(
       typeof globalThis.document === 'undefined' ||
       typeof globalThis.document.createElement !== 'function'
     ) {
+      // Node 单测环境：没有 canvas，渲染不了 —— 先销毁 task 再报错（避免漏 worker）
+      try {
+        await task.destroy()
+      } catch {
+        /* 忽略销毁异常 */
+      }
       throw new ImportError(
         '这个 PDF 没有可提取的文字',
         '它可能是扫描版（整页是图片）。本功能需要在浏览器环境使用（npm run dev → localhost:5173）；' +
           '命令行 / 单测环境没有 canvas，无法把页面渲染成图片。请在浏览器里导入。',
       )
     }
+
+    // 元信息必须在 destroy 之前取（destroy 后 WorkerTransport 已拆，静默拿不到）
+    const meta = await doc.getMetadata().catch(() => ({}))
 
     try {
       for (let i = 1; i <= numPages; i++) {
@@ -405,7 +413,8 @@ export async function importPdf(
         }
       }
     } finally {
-      // 与文本通道一致：每本书用完即销毁，避免 pdf.js worker 长留。
+      // 文本通道 + 扫描渲染通道都结束后才销毁 —— 全文件唯一的常规销毁点。
+      // 不销毁则每次导入都会留下一个 pdf.js worker 及其页面缓存。
       try {
         await task.destroy()
       } catch {
@@ -421,7 +430,6 @@ export async function importPdf(
       )
     }
 
-    const meta = await doc.getMetadata().catch(() => ({}))
     const info = meta && 'info' in meta && meta.info && typeof meta.info === 'object' ? meta.info as { Title?: unknown; Author?: unknown } : {}
     const title = metaString(info.Title) || fallbackTitle
     const author = metaString(info.Author) || undefined
@@ -440,6 +448,12 @@ export async function importPdf(
 
   const text = parts.join('\n\n')
   if (!text.trim()) {
+    // 非扫描版但抽不到正文（如加密页或空 PDF）—— 销毁 task 再报错，避免漏 worker
+    try {
+      await task.destroy()
+    } catch {
+      /* 忽略销毁异常 */
+    }
     throw new ImportError('这个 PDF 没有可提取的文字')
   }
 
@@ -454,6 +468,13 @@ export async function importPdf(
     if (a) author = a
   } catch {
     /* 元信息缺失不影响导入 */
+  }
+
+  // 正常文本出口：用完即销毁，避免 pdf.js worker 长留
+  try {
+    await task.destroy()
+  } catch {
+    /* 忽略销毁异常 */
   }
 
   if (warnings.length > 0) {

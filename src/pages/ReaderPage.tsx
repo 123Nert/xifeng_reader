@@ -133,6 +133,11 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [author, setAuthor] = useState<string | null>(null)
   const [totalChars, setTotalChars] = useState(0)
   const [page, setPage] = useState({ start: 0, end: 0 })
+  // 翻页回调里读的"当前页"镜像：state 更新是异步的，useCallback 闭包可能拿到过期 page
+  const pageRef = useRef(page)
+  useEffect(() => {
+    pageRef.current = page
+  }, [page])
   const [chromeVisible, setChromeVisible] = useState(true)
   const [settings, setSettings] = useState<ReaderSettings>(() => loadSettings())
   const [ready, setReady] = useState(false)
@@ -272,12 +277,15 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const turn = useCallback(
     (dir: -1 | 1) => {
+      // 扫描判定必须读 ref：turn 的依赖列表不含 isScanned/page，
+      // 读闭包值会在打开书后第一次渲染前拿到过期 false，走 pm 分支静默不翻页
+      const scanned = scannedPagesRef.current.length > 0
       const pm = pagemapRef.current
-      if (isScanned) {
+      if (scanned) {
         // 扫描版没有 PageMap；按页号前进/后退
         setAutoPlaying(false)
-        const total = totalPages
-        const cur = page.start
+        const total = scannedPagesRef.current.length
+        const cur = pageRef.current.start
         const next = dir === 1 ? Math.min(cur + 1, total - 1) : Math.max(cur - 1, 0)
         if (next === cur) {
           showToast(dir === 1 ? '已经是最后一页了' : '已经是第一页')
@@ -304,8 +312,10 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const jumpToFraction = useCallback(
     (fraction: number) => {
-      if (isScanned) {
-        const total = totalPages
+      // 同 turn：扫描判定读 ref，避免闭包过期
+      const scanned = scannedPagesRef.current.length > 0
+      if (scanned) {
+        const total = scannedPagesRef.current.length
         if (total === 0) return
         setAutoPlaying(false)
         const cur = Math.round(fraction * (total - 1))
@@ -995,7 +1005,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         onMouseUp={handleTapOrSelect}
         onScroll={isScroll ? handleScrollFlow : undefined}
       >
-        {isScroll ? (
+        {isScroll && !isScanned ? (
           <div className="scroll-flow">
             {totalChars === 0 ? (
               <div className="menu-empty">（这本书没有正文内容）</div>
