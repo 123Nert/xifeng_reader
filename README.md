@@ -1,7 +1,7 @@
 # xifeng 阅读
 
 [![version](https://img.shields.io/github/v/tag/123Nert/xifeng_reader?label=version)](https://github.com/123Nert/xifeng_reader/tags)
-[![tests](https://img.shields.io/badge/tests-199%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-222%20passing-brightgreen)](src)
 [![PWA](https://img.shields.io/badge/PWA-ready-blueviolet)](vite.config.ts)
 
 本地电子书阅读器（Web 应用）。核心闭环：**导入一本书 → 舒服地读完 → 下次打开接着读**。
@@ -14,7 +14,7 @@
 - TXT 自动识别 UTF-8 / GB18030（含 GBK）/ Big5 / UTF-16，可手动指定编码
 - EPUB 解析真实章节与目录、提取封面与作者（零依赖自研解析，见 [V5.0 方案](docs/V5.0-多格式导入方案.md)）
 - PDF **原版阅读**：导入时连原文件一起保存，阅读页默认显示 PDF 原来的样子（版式 / 图片 / 表格都在），可一键切到文字视图做搜索、划线、朗读（见 [V6.2 方案](docs/V6.2-PDF原版阅读方案.md)）
-- 书库：书名、阅读进度、最后阅读时间、搜索/排序/重命名/批量删除、阅读时长统计（今日/本周/累计）
+- 书库：**每本书的封面就是它的第一页**（PDF 渲染首页 / 文本排版首段 / EPUB 自带封面），另有书名、阅读进度、最后阅读时间、搜索/排序/重命名/批量删除、阅读时长统计（今日/本周/累计）
 - 阅读页：分页 / 连续滚动两种模式；按钮 / 键盘 / 点按区域翻页；自动翻页；TTS 朗读（读完自动翻页）
 - 排版：字号、行距、段距、页边距、首行缩进、两端对齐、字体预设与自定义字体
 - 主题：日间 / 护眼 / 夜间
@@ -23,6 +23,16 @@
 - PWA 可安装，离线可读；备份导出 / 导入（全量 JSON，含 PDF 原件）
 
 ## 当前版本
+
+**V6.3 书架封面（每本书的第一页）** ✅
+
+- 封面 = 打开这本书看到的第一眼：PDF 用原件渲染第 1 页，EPUB 用书内自带封面，
+  TXT / MD / HTML 把正文首段排版成书页（与阅读页同一套字体）。
+- 导入时顺手生成；**老书进书库后自动补齐**（一本本串行，生成一张显示一张）。
+- 任何失败都不影响导入：退回渐变色块封面，绝不挡住书。
+- 封面 400×560（5:7，与卡片一致）、单张 7–60 KB。
+
+完整设计见 [docs/V6.3-书架封面方案.md](docs/V6.3-书架封面方案.md)。
 
 **V6.2 PDF 原版阅读** ✅
 
@@ -42,7 +52,8 @@
 
 | 版本 | 主题 | 标记 |
 | --- | --- | --- |
-| v6.2.0 | PDF 原版阅读（原文件入库 + 按需渲染 + 双视图） | ✅ 当前 |
+| v6.3.0 | 书架封面（每本书的第一页） | ✅ 当前 |
+| v6.2.0 | PDF 原版阅读（原文件入库 + 按需渲染 + 双视图） | ✅ |
 | v6.1.0 | 扫描版 PDF 按页位图阅读 | ✅ |
 | v6.0.0 | PDF 支持（pdf.js 按需加载） | ✅ |
 | v5.0.0 | 多格式导入（EPUB / MD / HTML + 批量） | ✅ |
@@ -60,7 +71,7 @@
 ```bash
 npm install
 npm run dev        # 开发（http://localhost:5173）
-npm run test       # Vitest 单元测试（199 例）
+npm run test       # Vitest 单元测试（222 例）
 npm run build      # 产出纯静态文件到 dist/
 npm run preview    # 本地预览构建产物
 ```
@@ -89,7 +100,9 @@ src/
 │  ├─ search.ts              # 全文搜索
 │  ├─ purify.ts              # 导入净化（推广行清理）
 │  ├─ bookRepository.ts      # IndexedDB 读写（books/progress/bookmarks/stats/highlights/pdfFiles）
-│  ├─ pdfNav.ts              # PDF 页码 ↔ 字符偏移换算
+│  ├─ cover.ts               # 书架封面：正文摘录/折行 + canvas 绘制
+  ├─ bookCovers.ts          # 封面生成编排（PDF 首页 / EPUB 封面 / 文本首段）
+  ├─ pdfNav.ts              # PDF 页码 ↔ 字符偏移换算
 │  ├─ pdfOriginal.ts         # PDF 原版页面按需渲染（清晰度/内存上限/取消）
 │  ├─ scanView.ts            # 位图等比显示几何（缩放不变形）
 │  └─ settings.ts            # 阅读设置（localStorage + CSS 变量）
@@ -109,3 +122,4 @@ src/
 - [docs/V6.0-PDF支持方案.md](docs/V6.0-PDF支持方案.md) — 上述翻案：按需加载 / 扫描版识别 / 加密提示
 - [docs/V6.1-修复记录.md](docs/V6.1-修复记录.md) — PDF 导入失败三连修 + 扫描版位图被进度条遮挡的根因与验证
 - [docs/V6.2-PDF原版阅读方案.md](docs/V6.2-PDF原版阅读方案.md) — 原文件入库 + 读时按需渲染 + 原版/文字双视图
+- [docs/V6.3-书架封面方案.md](docs/V6.3-书架封面方案.md) — 每本书的第一页当封面：各格式来源、排版规则与实测

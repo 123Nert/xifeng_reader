@@ -13,10 +13,12 @@ import {
   importBackup,
   listLibrary,
   renameBook,
+  setBookCover,
   type LibraryEntry,
   type ReadingStats,
 } from '../core/bookRepository'
 import { applySettingsToDocument, loadSettings, saveSettings } from '../core/settings'
+import { buildBookCover, buildCoverFromImport } from '../core/bookCovers'
 
 /** 导入编码选项（V1.3：自动探测之外的兜底手段）。 */
 const CHARSET_OPTIONS = [
@@ -95,6 +97,34 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
     void refresh()
   }, [refresh])
 
+  /** V6.3：正在补封面的书籍 id（同一时刻只跑一本 —— 一次开一堆 pdf.js 会把主线程压住） */
+  const [coverPending, setCoverPending] = useState<string | null>(null)
+  /** 串行互斥：effect 会被 entries / pending 的更新反复触发，靠它挡住并发 */
+  const coverRunningRef = useRef<string | null>(null)
+  /** 本会话已尝试过、但没生成出封面的书 —— 不反复啃（失败多半是文件本身的问题） */
+  const coverTriedRef = useRef<Set<string>>(new Set())
+
+  /**
+   * 给还没有封面的书补齐封面（V6.3）：进书库时按顺序一本本生成，
+   * 生成一张写一张库并刷新列表，用户能看到书架逐渐"长出封面"。
+   */
+  useEffect(() => {
+    if (!entries || coverRunningRef.current) return
+    const next = entries.find((e) => !e.cover && !coverTriedRef.current.has(e.id))
+    if (!next) return
+    coverTriedRef.current.add(next.id)
+    coverRunningRef.current = next.id
+    setCoverPending(next.id)
+    void (async () => {
+      const cover = await buildBookCover(next.id)
+      if (cover) await setBookCover(next.id, cover)
+      coverRunningRef.current = null
+      setCoverPending(null)
+      // 刷新放在最后：entries 变了会再次触发本 effect，自然接上下一本
+      if (cover) await refresh()
+    })()
+  }, [entries, refresh])
+
   /** 导入单个文件（V5.0：多格式 + 净化 + 元信息；V6.2：PDF 连原件一起存，可看原版）。 */
   const importOneFile = useCallback(
     async (file: File): Promise<{ ok: boolean; title?: string; detail?: string }> => {
@@ -119,6 +149,9 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
 
         const isPdf = result.format === 'pdf'
         const pageCount = result.pdfPageStarts?.length ?? 0
+        // V6.3：封面 = 这本书的第一页（PDF 渲染首页 / 文本画正文开头 / EPUB 用自带封面）
+        setProgressText(isPdf ? '生成封面（PDF 首页）…' : '生成封面…')
+        const cover = await buildCoverFromImport(result, buffer, content)
         // V6.2：PDF 连原件一起存 —— 阅读页按需渲染"原来的样子"
         await addBookWithPdf(
           {
@@ -129,7 +162,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
             charset: result.charset ?? result.format.toUpperCase(),
             importedAt: Date.now(),
             format: result.format,
-            cover: result.cover,
+            cover: cover ?? result.cover,
             tocEntries: result.tocEntries,
             author: result.author,
             language: result.language,
@@ -460,20 +493,22 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
                   <input type="checkbox" className="card-check" checked={selected.has(entry.id)} readOnly />
                 )}
                 <div
-                  className="book-cover"
-                  style={
-                    entry.cover
-                      ? { backgroundImage: `url(${entry.cover})`, backgroundSize: 'cover', backgroundPosition: 'center' }
-                      : { background: `linear-gradient(135deg, ${c1}, ${c2})` }
-                  }
+                  className={`book-cover${entry.cover ? ' has-image' : ''}${coverPending === entry.id ? ' cover-pending' : ''}`}
+                  style={entry.cover ? undefined : { background: `linear-gradient(135deg, ${c1}, ${c2})` }}
                 >
+                  {/* V6.3：真封面 = 这本书的第一页（PDF 首页 / 文本首段 / EPUB 自带封面）。
+                      有封面时不再叠加大字书名 —— 书页本身就有字，书名在卡片下方已有。 */}
+                  {entry.cover && <img className="cover-image" src={entry.cover} alt="" />}
                   {entry.format && entry.format !== 'txt' && (
                     <span className="cover-format">
                       {FORMAT_LABELS[entry.format]}
                       {entry.scanned ? '·扫描' : ''}
                     </span>
                   )}
-                  <span className="cover-title">{entry.title}</span>
+                  {!entry.cover && <span className="cover-title">{entry.title}</span>}
+                  {coverPending === entry.id && !entry.cover && (
+                    <span className="cover-hint">生成封面…</span>
+                  )}
                 </div>
                 <div className="book-meta">
                   <div className="book-title" title={entry.title}>

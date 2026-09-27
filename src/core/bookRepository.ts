@@ -528,6 +528,19 @@ export async function renameBook(id: string, title: string): Promise<void> {
   await db.put('books', book)
 }
 
+/**
+ * V6.3：写入/清除书籍封面（书架卡片显示"这本书的第一页"）。
+ * 只改封面字段，不动其它属性；传 null 表示清除（回退渐变色块）。
+ */
+export async function setBookCover(id: string, cover: string | null): Promise<void> {
+  const db = await getDB()
+  const book = await db.get('books', id)
+  if (!book) return
+  if (cover) book.cover = cover
+  else delete book.cover
+  await db.put('books', book)
+}
+
 // ---------- 备份与恢复（V2.0） ----------
 
 export interface BackupData {

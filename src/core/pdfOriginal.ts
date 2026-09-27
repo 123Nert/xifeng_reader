@@ -191,3 +191,34 @@ export class PdfOriginal {
     }
   }
 }
+
+/**
+ * V6.3：把一份 PDF 的**第 1 页**渲染成封面尺寸的位图（用于书架封面）。
+ * 自带开-渲染-销毁全流程：只为拿一张封面，不长期持有 worker。
+ * 无 DOM canvas / 解析失败 / 空文档时返回 null —— 封面是可选增强，不能挡住导入。
+ */
+export async function renderPdfFirstPage(
+  bytes: ArrayBuffer,
+  targetWidth: number,
+): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null
+  if (!(bytes.byteLength > 0) || !(targetWidth > 0)) return null
+
+  let original: PdfOriginal | null = null
+  try {
+    original = await PdfOriginal.open(bytes)
+    if (original.pageCount < 1) return null
+    const rendered = await original.renderPage(0, {
+      width: Math.round(targetWidth),
+      // 封面按 5:7 高宽比装订，这里只按宽度给目标，纵向给足余量由 fitRenderScale 收敛
+      height: Math.round((targetWidth * 7) / 5),
+      dpr: 1,
+    })
+    return rendered ? { dataUrl: rendered.dataUrl, width: rendered.width, height: rendered.height } : null
+  } catch (e) {
+    console.error('[cover] PDF 首页渲染失败:', e instanceof Error ? e.message : String(e))
+    return null
+  } finally {
+    void original?.destroy()
+  }
+}

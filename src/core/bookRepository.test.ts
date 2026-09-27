@@ -163,6 +163,49 @@ describe('bookRepository: 重命名（V2.0）', () => {
   })
 })
 
+describe('bookRepository: 封面（V6.3）', () => {
+  it('写入封面后书库列表能读到', async () => {
+    await repo.addBook(book('c1', '正文'))
+    await repo.setBookCover('c1', 'data:image/jpeg;base64,AAA')
+    const [entry] = await repo.listLibrary()
+    expect(entry.cover).toBe('data:image/jpeg;base64,AAA')
+  })
+
+  it('传 null 清除封面（回退渐变色块）', async () => {
+    await repo.addBook(book('c2', '正文'))
+    await repo.setBookCover('c2', 'data:image/jpeg;base64,AAA')
+    await repo.setBookCover('c2', null)
+    expect((await repo.listLibrary())[0].cover).toBeUndefined()
+  })
+
+  it('不存在的书与其它字段都不受影响', async () => {
+    await repo.addBookWithPdf(
+      { ...book('c3', '正文'), format: 'pdf', pdfPageCount: 2 },
+      { bytes: new Uint8Array([1, 2, 3]).buffer, size: 3 },
+    )
+    await repo.setBookCover('c3', 'data:image/jpeg;base64,BBB')
+    await repo.setBookCover('ghost', 'data:image/jpeg;base64,CCC')
+
+    const b = await repo.getBook('c3')
+    expect(b?.cover).toBe('data:image/jpeg;base64,BBB')
+    expect(b?.pdfPageCount).toBe(2)
+    expect(b?.pdfOriginal).toBe(true)
+    expect(b?.content).toBe('正文')
+  })
+
+  it('封面随备份导出并可恢复', async () => {
+    await repo.addBook(book('c4', '正文'))
+    await repo.setBookCover('c4', 'data:image/jpeg;base64,DDD')
+    const backup = await repo.exportBackup({})
+
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+    await repo.importBackup(backup)
+    expect((await repo.listLibrary())[0].cover).toBe('data:image/jpeg;base64,DDD')
+  })
+})
+
 describe('bookRepository: 划线（V3.0）', () => {
   it('添加划线后按位置升序列出，仅含本书', async () => {
     await repo.addBook(book('h1', '正文'))

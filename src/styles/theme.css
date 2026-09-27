@@ -202,6 +202,40 @@ button {
   overflow: hidden;
 }
 
+/* V6.3 真封面（书的第一页）：整张铺满，不再叠加大字书名 */
+.book-cover.has-image {
+  padding: 0;
+  background: #fdfbf5;
+}
+
+/* 真封面的左上角正是书页第一行文字，格式徽章挪到右下角，避免压住内容 */
+.book-cover.has-image .cover-format {
+  top: auto;
+  left: auto;
+  right: 8px;
+  bottom: 8px;
+}
+
+/* 封面位图与卡片同宽高比（5:7），cover 铺满不变形、不留缝 */
+.cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 补封面中的提示（老书进库时短暂出现） */
+.cover-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
 .cover-title {
   font-size: 15px;
   line-height: 1.35;
