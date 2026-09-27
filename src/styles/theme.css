@@ -346,13 +346,22 @@ button {
 /* 扫描版位图：完整显示整页（不裁剪），滚动模式或分页模式均可见。
  * 分页模式视口不可滚，一页图 ~1020px 远超视口 —— 必须限高到"视口减悬浮工具栏"
  * （64px 顶栏 + 104px 底栏 = 168px），整页缩进一屏；滚动模式同样适用，
- * 图片高于该值时按比例缩小，配合容器 padding 保证完整可见。 */
+ * 图片高于该值时按比例缩小，配合容器 padding 保证完整可见。
+ * 注意：zoom > 1 时 img 走内联 style（width 按倍数放大、maxWidth:none），
+ * 这里的 max-height 只约束 zoom=1 的适应视口态 —— 用 :not 选择器区分不可行
+ * （内联 style 优先级更高，无需覆盖）。 */
 .page-content.scan-page img {
   display: block;
   max-width: 100%;
   max-height: calc(100dvh - 168px);
   height: auto;
   margin: 0 auto;
+}
+
+/* zoom > 1：内联 style 已设 maxWidth:none，这里不与它竞争；
+ * 容器允许横向滚动，放大的图片可左右+上下滚动查看 */
+.page-viewport:has(.page-content.scan-page img[style*='max-width: none']) {
+  overflow: auto;
 }
 
 /* 离屏测量探针：不设 bottom 约束，高度随内容自然生长；视觉隐藏但参与布局 */

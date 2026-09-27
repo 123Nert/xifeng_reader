@@ -28,6 +28,8 @@ export interface ReaderSettings {
   autoPageSeconds: number
   /** 阅读模式（V2.1）：分页 / 连续滚动 */
   pageMode: PageModeName
+  /** V6.1：扫描版 PDF 位图缩放（1 = 适应视口，可放大到 3） */
+  scanZoom: number
 }
 
 export const FONT_MIN = 14
@@ -105,6 +107,18 @@ export type PageModeName = (typeof PAGE_MODE_NAMES)[number]
 export const PAGE_MODE_DEFAULT: PageModeName = 'paged'
 export const PAGE_MODE_LABELS: Record<PageModeName, string> = { paged: '分页', scroll: '滚动' }
 
+// ---------- V6.1 扫描版位图缩放 ----------
+
+export const SCAN_ZOOM_MIN = 1
+export const SCAN_ZOOM_MAX = 4
+export const SCAN_ZOOM_STEP = 0.5
+export const SCAN_ZOOM_DEFAULT = 1
+
+export function clampScanZoom(z: number): number {
+  if (!Number.isFinite(z)) return SCAN_ZOOM_DEFAULT
+  return Math.min(SCAN_ZOOM_MAX, Math.max(SCAN_ZOOM_MIN, Math.round(z * 2) / 2))
+}
+
 const STORAGE_KEY = 'xifeng.settings'
 
 export function clampFontSize(size: number): number {
@@ -130,6 +144,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
     fontFamily: FONT_FAMILY_DEFAULT,
     autoPageSeconds: AUTO_PAGE_DEFAULT,
     pageMode: PAGE_MODE_DEFAULT,
+    scanZoom: SCAN_ZOOM_DEFAULT,
   }
   try {
     const raw = storage.getItem(STORAGE_KEY)
@@ -166,6 +181,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
         pageMode: PAGE_MODE_NAMES.includes(p.pageMode as PageModeName)
           ? (p.pageMode as PageModeName)
           : fallback.pageMode,
+        scanZoom: clampScanZoom(Number(p.scanZoom)),
       }
     }
   } catch {

@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampFontSize,
+  clampScanZoom,
   loadSettings,
   nextLineHeight,
   nextMargin,
@@ -19,6 +20,7 @@ import {
   MARGIN_NAMES,
   PARA_SPACING_DEFAULT,
   PARA_SPACING_STEPS,
+  SCAN_ZOOM_MAX,
   THEME_DEFAULT,
   THEME_NAMES,
   type ReaderSettings,
@@ -43,6 +45,7 @@ const DEFAULTS: ReaderSettings = {
   fontFamily: 'serif',
   autoPageSeconds: 10,
   pageMode: 'paged',
+  scanZoom: 1,
 }
 
 describe('settings: 读写', () => {
@@ -63,6 +66,7 @@ describe('settings: 读写', () => {
       customFontName: 'MyFont',
       autoPageSeconds: 5,
       pageMode: 'scroll',
+      scanZoom: 2,
     }
     const storage = makeStorage()
     saveSettings(s, storage)
@@ -148,5 +152,22 @@ describe('settings: 取值域', () => {
     }
     expect(m).toBe(MARGIN_DEFAULT)
     expect(seen.size).toBe(MARGIN_NAMES.length)
+  })
+
+  it('clampScanZoom 限制在 [1, 4] 且按 0.5 步进取整', () => {
+    expect(clampScanZoom(0.2)).toBe(1)
+    expect(clampScanZoom(1)).toBe(1)
+    expect(clampScanZoom(1.3)).toBe(1.5)
+    expect(clampScanZoom(2.7)).toBe(2.5)
+    expect(clampScanZoom(99)).toBe(SCAN_ZOOM_MAX)
+    expect(clampScanZoom(-3)).toBe(1)
+    expect(clampScanZoom(NaN)).toBe(1)
+  })
+
+  it('旧版本数据（缺少 scanZoom）回退默认值 1', () => {
+    const storage = makeStorage({
+      'xifeng.settings': '{"fontSize":20,"lineHeight":1.75,"theme":"sepia"}',
+    })
+    expect(loadSettings(storage).scanZoom).toBe(1)
   })
 })

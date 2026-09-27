@@ -39,11 +39,13 @@ import {
 import {
   applySettingsToDocument,
   clampFontSize,
+  clampScanZoom,
   loadSettings,
   nextLineHeight,
   nextMargin,
   nextParaSpacing,
   saveSettings,
+  SCAN_ZOOM_STEP,
   FONT_STEP,
   type ReaderSettings,
   type ThemeName,
@@ -385,6 +387,21 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       applySettingsToDocument(next)
     },
     [settings],
+  )
+
+  /** V6.1：扫描版位图缩放（自由放大页面，与浏览器缩放无关）。 */
+  const changeScanZoom = useCallback(
+    (delta: -1 | 1) => {
+      const next = clampScanZoom(settings.scanZoom + delta * SCAN_ZOOM_STEP)
+      if (next === settings.scanZoom) {
+        showToast(delta === 1 ? '已放大到最大' : '已缩小到最小')
+        return
+      }
+      setSettings({ ...settings, scanZoom: next })
+      saveSettings({ ...settings, scanZoom: next })
+      showToast(`页面 ${next === 1 ? '适应屏幕' : '×' + next}`)
+    },
+    [settings, showToast],
   )
 
   /** 排版类设置统一走 commitSettings（写回 CSS 变量并锚定重排，阅读位置不丢）。 */
@@ -800,6 +817,29 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const isScroll = settings.pageMode === 'scroll'
 
+  // ---- V6.1：扫描版 Ctrl+滚轮 缩放（与浏览器缩放无关，只改位图显示尺寸） ----
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el || !isScanned) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const delta = e.deltaY < 0 ? 1 : -1
+      const next = clampScanZoom(
+        (Number(el.dataset.scanZoom) || 1) + delta * SCAN_ZOOM_STEP,
+      )
+      if (next === (Number(el.dataset.scanZoom) || 1)) return
+      el.dataset.scanZoom = String(next)
+      setSettings((prev) => {
+        const merged = { ...prev, scanZoom: next }
+        saveSettings(merged)
+        return merged
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [isScanned, ready])
+
   /** 锚点页之后按需链式计算的页序列（fitFrom 纯函数，不改状态）。 */
   const extraPages = useMemo<Page[]>(() => {
     if (!isScroll || !ready) return []
@@ -973,11 +1013,17 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     if (scannedPagesRef.current.length > 0) {
       const p = scannedPagesRef.current[page.start] // page.start 即 0-based 页下标
       if (!p) return '（该页尚未渲染完成，请稍后）'
+      // scanZoom=1 适应视口；>1 用户自由放大（超出部分滚动查看，见 .scan-page CSS）
+      const z = settings.scanZoom
       return (
         <img
           src={p.dataUrl}
           alt={`第 ${p.page + 1} 页`}
-          style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' }}
+          style={
+            z === 1
+              ? { display: 'block', maxWidth: '100%', maxHeight: 'calc(100dvh - 168px)', height: 'auto', margin: '0 auto' }
+              : { display: 'block', width: `${Math.round(p.width * z)}px`, maxWidth: 'none', height: 'auto', margin: '0 auto' }
+          }
         />
       )
     }
@@ -1046,6 +1092,27 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         <div className="bottom-row">
           <span className="page-info">{Math.round(percent * 100)}%</span>
           <div className="menu-buttons">
+            {isScanned && (
+              <>
+                <button
+                  className="btn chip"
+                  title="缩小 PDF 页面"
+                  onClick={() => changeScanZoom(-1)}
+                >
+                  －
+                </button>
+                <span className="page-info" title="PDF 页面缩放倍数">
+                  {settings.scanZoom === 1 ? '适应' : '×' + settings.scanZoom}
+                </span>
+                <button
+                  className="btn chip"
+                  title="放大 PDF 页面（小字看得清）"
+                  onClick={() => changeScanZoom(1)}
+                >
+                  ＋
+                </button>
+              </>
+            )}
             <button
               className={`btn chip${autoPlaying ? ' active' : ''}`}
               title="自动向后翻页（速度在设置中调整）"
