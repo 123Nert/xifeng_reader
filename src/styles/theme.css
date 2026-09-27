@@ -332,36 +332,35 @@ button {
  * 扫描版 PDF（V6.1）位图页：整页是一张图，高度可达千余 px，需要滚动才能看全。
  * .page-content 的 absolute + top/bottom:0 + overflow:hidden 是分页模式的"固定一页"
  * 布局，会把位图钳在视口高度里 —— 底部沉到悬浮进度条下面且无法滚出。
- * .scan-page 解除钳制：文档流内自然生长、上下 padding 预留悬浮工具栏高度，
- * 滚动交给 .page-viewport.scroll-mode（分页模式下位图按页翻，本就不需要滚动）。
+ * .scan-page 解除钳制：文档流内自然生长，滚动交给 .page-viewport.scan-mode。
  */
 .page-content.scan-page {
   position: static;
   bottom: auto;
   overflow: visible;
-  /* 扫描版 img 自带 margin:0 auto，容器退化为普通块级包裹 */
+  /* 位图在内容区里居中（.scan-image 的 auto margin 生效）；
+   * 上下内边距同时是"悬浮工具栏预留"，与 JS 侧 scanBoxFromViewport 量的是同一组值 */
+  max-width: none;
+  margin: 0;
   padding: 64px var(--content-padding-x, 26px) 104px;
 }
 
-/* 扫描版位图：完整显示整页（不裁剪），滚动模式或分页模式均可见。
- * 分页模式视口不可滚，一页图 ~1020px 远超视口 —— 必须限高到"视口减悬浮工具栏"
- * （64px 顶栏 + 104px 底栏 = 168px），整页缩进一屏；滚动模式同样适用，
- * 图片高于该值时按比例缩小，配合容器 padding 保证完整可见。
- * 注意：zoom > 1 时 img 走内联 style（width 按倍数放大、maxWidth:none），
- * 这里的 max-height 只约束 zoom=1 的适应视口态 —— 用 :not 选择器区分不可行
- * （内联 style 优先级更高，无需覆盖）。 */
-.page-content.scan-page img {
+/*
+ * 扫描版位图：显示尺寸由 core/scanView 等比算出后写成 width/height 内联样式，
+ * 因此这里一律不设 max-width / max-height —— 只要留一条钳制规则，
+ * 浏览器就会在"已定宽"的前提下单独压低高度，把整页压成横向条纹（字体变形）。
+ * 这里只负责居中与不拉伸（width/height 已同比例，object-fit 不会触发二次缩放）。
+ */
+.page-content.scan-page .scan-image {
   display: block;
-  max-width: 100%;
-  max-height: calc(100dvh - 168px);
-  height: auto;
   margin: 0 auto;
+  object-fit: contain;
 }
 
-/* zoom > 1：内联 style 已设 maxWidth:none，这里不与它竞争；
- * 容器允许横向滚动，放大的图片可左右+上下滚动查看 */
-.page-viewport:has(.page-content.scan-page img[style*='max-width: none']) {
+/* 扫描版：位图可大于视口，滚动条交给视口本身（横向 + 纵向都能滚） */
+.page-viewport.scan-mode {
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 /* 离屏测量探针：不设 bottom 约束，高度随内容自然生长；视觉隐藏但参与布局 */

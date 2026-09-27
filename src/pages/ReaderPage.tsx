@@ -3,8 +3,22 @@
  * 只渲染当前页切片；翻页 / 跳转 / 锚定重排全部委托 core 层 PageMap。
  * 顶栏与底栏为悬浮层：显隐不改变正文区尺寸，避免无谓重排。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { PageMap, type Measurer, type Page } from '../core/pagination'
+import {
+  computeScanView,
+  scanBoxFromViewport,
+  scrollToAnchor,
+  zoomAnchor,
+} from '../core/scanView'
 import { buildToc, currentChapterIndex, type Toc } from '../core/toc'
 import {
   anchorContext,
@@ -167,6 +181,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   /** 滚动模式（V2.1）：锚点页之后已渲染的页数、视口顶部所在页起点 */
   const [extraCount, setExtraCount] = useState(0)
   const [viewStart, setViewStart] = useState(0)
+  /** V6.1 扫描版：可用内容区（视口 − 容器内边距），位图显示尺寸的等比基准 */
+  const [scanBox, setScanBox] = useState<{ width: number; height: number } | null>(null)
 
   const textRef = useRef('')
   const pagemapRef = useRef<PageMap | null>(null)
@@ -176,6 +192,18 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const viewStartRef = useRef(0)
   /** V6.1：扫描版 PDF 时缓存所有页位图 */
   const scannedPagesRef = useRef<PdfPageRecord[]>([])
+  /** V6.1 扫描版：位图容器与位图本身（缩放时量真实几何、按光标锚定滚动） */
+  const scanPaneRef = useRef<HTMLDivElement>(null)
+  const scanImgRef = useRef<HTMLImageElement>(null)
+  /** 扫描版缩放倍数镜像：wheel 连续触发时 state 尚未更新，读 ref 才不丢档 */
+  const scanZoomRef = useRef(1)
+  /** 待恢复的光标锚点（缩放后由 layout effect 消费一次） */
+  const pendingAnchorRef = useRef<{
+    rx: number
+    ry: number
+    pointerX: number
+    pointerY: number
+  } | null>(null)
   /** 点按判定：记录按下位置与时刻（V4.0 与批注点击共同依赖） */
   const mouseDownRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
@@ -356,6 +384,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   // ---- 阅读设置：写回 CSS 变量并锚定重排，阅读位置不丢（验收标准 5） ----
   const commitSettings = useCallback((next: ReaderSettings) => {
+    // 镜像同步更新：Ctrl+滚轮/连点会在一帧内连续触发，读 ref 才不把多档合并成一步
+    settingsRef.current = next
     setSettings(next)
     saveSettings(next)
     applySettingsToDocument(next)
@@ -370,11 +400,17 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const changeFont = useCallback(
     (delta: -1 | 1) => {
-      const next = { ...settings, fontSize: clampFontSize(settings.fontSize + delta * FONT_STEP) }
-      commitSettings(next)
-      showToast(`字号 ${next.fontSize}`)
+      // 读 ref 而非闭包：Ctrl+滚轮/连点会在一帧内连续触发，闭包里的字号会重复命中同一档
+      const cur = settingsRef.current
+      const next = clampFontSize(cur.fontSize + delta * FONT_STEP)
+      if (next === cur.fontSize) {
+        showToast(delta === 1 ? '已到最大字号' : '已到最小字号')
+        return
+      }
+      commitSettings({ ...cur, fontSize: next })
+      showToast(`字号 ${next}`)
     },
-    [settings, commitSettings, showToast],
+    [commitSettings, showToast],
   )
 
   const cycleLineHeight = useCallback(() => {
@@ -394,19 +430,54 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     [settings],
   )
 
-  /** V6.1：扫描版位图缩放（自由放大页面，与浏览器缩放无关）。 */
+  /** V6.1：扫描版位图缩放（自由放大页面，与浏览器缩放无关）。
+   *  尺寸交给 core/scanView 等比算出，CSS 一律不再钳制 —— 旧实现"定宽 + max-height
+   *  压低高度"会把整页压扁，字迹糊成横向条纹（用户反馈的"字体变形"）。 */
+  const applyScanZoom = useCallback((next: number, pointer?: { x: number; y: number }) => {
+    const el = viewportRef.current
+    const img = scanImgRef.current
+    if (el && img) {
+      // 记下光标下的点在当前图内的相对位置，缩放后由 layout effect 复原
+      const elRect = el.getBoundingClientRect()
+      const imgRect = img.getBoundingClientRect()
+      const pointerX = pointer ? pointer.x - elRect.left : el.clientWidth / 2
+      const pointerY = pointer ? pointer.y - elRect.top : el.clientHeight / 2
+      pendingAnchorRef.current = {
+        ...zoomAnchor({
+          left: imgRect.left - elRect.left + el.scrollLeft,
+          top: imgRect.top - elRect.top + el.scrollTop,
+          width: imgRect.width,
+          height: imgRect.height,
+          scrollLeft: el.scrollLeft,
+          scrollTop: el.scrollTop,
+          pointerX,
+          pointerY,
+        }),
+        pointerX,
+        pointerY,
+      }
+    }
+    scanZoomRef.current = next
+    // 镜像一起更新：字号/排版设置读的是 settingsRef，落下这一步会把旧倍数写回去
+    const merged = { ...settingsRef.current, scanZoom: next }
+    settingsRef.current = merged
+    setSettings(merged)
+    saveSettings(merged)
+  }, [])
+
+  /** 加减一档缩放；连续滚轮/连点时以 ref 为准，不丢档。 */
   const changeScanZoom = useCallback(
-    (delta: -1 | 1) => {
-      const next = clampScanZoom(settings.scanZoom + delta * SCAN_ZOOM_STEP)
-      if (next === settings.scanZoom) {
+    (delta: -1 | 1, pointer?: { x: number; y: number }) => {
+      const cur = scanZoomRef.current
+      const next = clampScanZoom(cur + delta * SCAN_ZOOM_STEP)
+      if (next === cur) {
         showToast(delta === 1 ? '已放大到最大' : '已缩小到最小')
         return
       }
-      setSettings({ ...settings, scanZoom: next })
-      saveSettings({ ...settings, scanZoom: next })
+      applyScanZoom(next, pointer)
       showToast(`页面 ${next === 1 ? '适应屏幕' : '×' + next}`)
     },
-    [settings, showToast],
+    [applyScanZoom, showToast],
   )
 
   /** 排版类设置统一走 commitSettings（写回 CSS 变量并锚定重排，阅读位置不丢）。 */
@@ -822,29 +893,96 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   const isScroll = settings.pageMode === 'scroll'
 
-  // ---- V6.1：扫描版 Ctrl+滚轮 缩放（与浏览器缩放无关，只改位图显示尺寸） ----
+  // ---- V6.1：Ctrl/Cmd+滚轮 = 阅读区整体放大（替代浏览器缩放） ----
+  // 扫描版：位图等比缩放，光标下的那一点停住不动；
+  // 文字版：走字号档位，重排后仍锚定当前阅读位置 —— 都不改浏览器缩放级别。
   useEffect(() => {
     const el = viewportRef.current
-    if (!el || !isScanned) return
-    // 缩放基准必须与 settings.scanZoom 同步（dataset 只在 wheel 里更新，
-    // 打开书时未初始化，会从 1 重新起步 —— 用户已设置的倍数被重置）
-    el.dataset.scanZoom = String(settingsRef.current.scanZoom)
+    if (!el) return
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
-      const cur = Number(el.dataset.scanZoom) || 1
-      const next = clampScanZoom(cur + (e.deltaY < 0 ? SCAN_ZOOM_STEP : -SCAN_ZOOM_STEP))
-      if (next === cur) return
-      el.dataset.scanZoom = String(next)
-      setSettings((prev) => {
-        const merged = { ...prev, scanZoom: next }
-        saveSettings(merged)
-        return merged
-      })
+      const dir: -1 | 1 = e.deltaY < 0 ? 1 : -1
+      if (scannedPagesRef.current.length > 0) {
+        changeScanZoom(dir, { x: e.clientX, y: e.clientY })
+      } else {
+        changeFont(dir)
+      }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [isScanned, ready])
+  }, [changeScanZoom, changeFont, ready])
+
+  // ---- V6.1 扫描版：可用内容区随视口变化（位图尺寸由 JS 等比算，CSS 不再钳制） ----
+  // 不用 ResizeObserver：它的回调挂在渲染步骤上，后台标签页（document.hidden）
+  // 根本不派发，窗口尺寸变了位图会停在旧尺寸。window resize 事件在浏览器里
+  // 一定会到（隐藏标签页也不例外），切回前台再补量一次。
+  useLayoutEffect(() => {
+    if (!scannedPagesRef.current.length) return
+    const el = viewportRef.current
+    const pane = scanPaneRef.current
+    if (!el || !pane) return
+    const measure = () => {
+      const cs = getComputedStyle(pane)
+      const box = scanBoxFromViewport({
+        clientWidth: el.clientWidth,
+        clientHeight: el.clientHeight,
+        padLeft: parseFloat(cs.paddingLeft) || 0,
+        padRight: parseFloat(cs.paddingRight) || 0,
+        padTop: parseFloat(cs.paddingTop) || 0,
+        padBottom: parseFloat(cs.paddingBottom) || 0,
+      })
+      setScanBox((prev) =>
+        prev && prev.width === box.width && prev.height === box.height ? prev : box,
+      )
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    document.addEventListener('visibilitychange', measure)
+    return () => {
+      window.removeEventListener('resize', measure)
+      document.removeEventListener('visibilitychange', measure)
+    }
+  }, [ready, settings.pageMargin, scannedPagesRef.current.length])
+
+  // 缩放倍数镜像：wheel 连续触发时 settings 尚未落地，读 ref 才不丢档
+  useEffect(() => {
+    scanZoomRef.current = settings.scanZoom
+  }, [settings.scanZoom])
+
+  // 位图尺寸变化后用 layout effect 恢复光标锚点（此时 DOM 已是新几何，可量真实位置）
+  useLayoutEffect(() => {
+    const anchor = pendingAnchorRef.current
+    pendingAnchorRef.current = null
+    const el = viewportRef.current
+    const img = scanImgRef.current
+    if (!anchor || !el || !img) return
+    const elRect = el.getBoundingClientRect()
+    const imgRect = img.getBoundingClientRect()
+    const next = scrollToAnchor({
+      left: imgRect.left - elRect.left + el.scrollLeft,
+      top: imgRect.top - elRect.top + el.scrollTop,
+      width: imgRect.width,
+      height: imgRect.height,
+      rx: anchor.rx,
+      ry: anchor.ry,
+      pointerX: anchor.pointerX,
+      pointerY: anchor.pointerY,
+      maxScrollLeft: el.scrollWidth - el.clientWidth,
+      maxScrollTop: el.scrollHeight - el.clientHeight,
+    })
+    el.scrollLeft = next.scrollLeft
+    el.scrollTop = next.scrollTop
+  }, [settings.scanZoom, scanBox])
+
+  // 翻到新一页时位图归位到左上角（上一页的放大滚动位置对不上另一页）
+  useLayoutEffect(() => {
+    if (!scannedPagesRef.current.length) return
+    const el = viewportRef.current
+    if (!el) return
+    el.scrollLeft = 0
+    el.scrollTop = 0
+  }, [page.start])
 
   /** 锚点页之后按需链式计算的页序列（fitFrom 纯函数，不改状态）。 */
   const extraPages = useMemo<Page[]>(() => {
@@ -1019,17 +1157,23 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     if (scannedPagesRef.current.length > 0) {
       const p = scannedPagesRef.current[page.start] // page.start 即 0-based 页下标
       if (!p) return '（该页尚未渲染完成，请稍后）'
-      // scanZoom=1 适应视口；>1 用户自由放大（超出部分滚动查看，见 .scan-page CSS）
-      const z = settings.scanZoom
+      // 显示尺寸整块交给 core/scanView 算：宽高同源，任何倍数下比例都等于源图。
+      // CSS 侧对 .scan-image 不再有任何 max-width / max-height —— 那是压扁位图的元凶。
+      const view = scanBox
+        ? computeScanView({
+            srcWidth: p.width,
+            srcHeight: p.height,
+            box: scanBox,
+            zoom: settings.scanZoom,
+          })
+        : null
       return (
         <img
+          ref={scanImgRef}
+          className="scan-image"
           src={p.dataUrl}
           alt={`第 ${p.page + 1} 页`}
-          style={
-            z === 1
-              ? { display: 'block', maxWidth: '100%', maxHeight: 'calc(100dvh - 168px)', height: 'auto', margin: '0 auto' }
-              : { display: 'block', width: `${Math.round(p.width * z)}px`, maxWidth: 'none', height: 'auto', margin: '0 auto' }
-          }
+          style={view ? { width: `${Math.round(view.width)}px`, height: `${Math.round(view.height)}px` } : undefined}
         />
       )
     }
@@ -1052,10 +1196,10 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
       <main
         ref={viewportRef}
-        className={`page-viewport${isScroll ? ' scroll-mode' : ''}`}
+        className={`page-viewport${isScroll && !isScanned ? ' scroll-mode' : ''}${isScanned ? ' scan-mode' : ''}`}
         onMouseDown={handleMouseDown}
         onMouseUp={handleTapOrSelect}
-        onScroll={isScroll ? handleScrollFlow : undefined}
+        onScroll={isScroll && !isScanned ? handleScrollFlow : undefined}
       >
         {isScroll && !isScanned ? (
           <div className="scroll-flow">
@@ -1074,8 +1218,12 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
               </>
             )}
           </div>
+        ) : isScanned ? (
+          <div ref={scanPaneRef} className="page-content scan-page" aria-live="polite">
+            {renderContent()}
+          </div>
         ) : (
-          <div className={`page-content${isScanned ? ' scan-page' : ''}`} aria-live="polite">
+          <div className="page-content" aria-live="polite">
             {renderContent()}
           </div>
         )}
