@@ -51,9 +51,9 @@ interface PdfTextContent {
 
 interface PdfPage {
   getTextContent(): Promise<PdfTextContent>
-  /** pdf.js 渲染管线：把当前页画到提供的 canvasContext 上。 */
+  /** pdf.js 渲染管线：把当前页画到提供的 canvas 上。 */
   getViewport(opts: { scale: number }): { width: number; height: number; scale: number }
-  render(opts: { canvasContext?: unknown; viewport: unknown }): { promise: Promise<unknown> }
+  render(opts: { canvas?: unknown; canvasContext?: unknown; viewport: unknown }): { promise: Promise<unknown> }
 }
 
 interface PdfMetadata {
@@ -77,10 +77,12 @@ interface PdfjsModule {
   getDocument(src: unknown): PdfLoadingTask
 }
 
-/** pdf.js 的可选静态资源目录，两个 URL 都必须以 `/` 结尾（pdf.js 直接字符串拼接）。 */
+/** pdf.js 的可选静态资源目录，三个 URL 都必须以 `/` 结尾（pdf.js 直接字符串拼接）。 */
 export interface PdfAssetUrls {
   cMapUrl: string
   standardFontDataUrl: string
+  /** V6.1：扫描版渲染必须的 jbig2/openjpeg/qcms/quickjs wasm；缺则 page.render 抛 NetworkError */
+  wasmUrl: string
 }
 
 let pdfjsPromise: Promise<PdfjsModule> | null = null
@@ -99,12 +101,20 @@ function isNodeRuntime(): boolean {
 export async function resolvePdfAssets(): Promise<PdfAssetUrls> {
   if (!isNodeRuntime()) {
     const root = new URL('pdfjs/', document.baseURI).href
-    return { cMapUrl: `${root}cmaps/`, standardFontDataUrl: `${root}standard_fonts/` }
+    return {
+      cMapUrl: `${root}cmaps/`,
+      standardFontDataUrl: `${root}standard_fonts/`,
+      wasmUrl: `${root}wasm/`,
+    }
   }
   const { createRequire } = await import(/* @vite-ignore */ 'node:module')
   const pkgPath: string = createRequire(import.meta.url).resolve('pdfjs-dist/package.json')
   const root = pkgPath.replace(/package\.json$/, '').split('\\').join('/')
-  return { cMapUrl: `${root}cmaps/`, standardFontDataUrl: `${root}standard_fonts/` }
+  return {
+    cMapUrl: `${root}cmaps/`,
+    standardFontDataUrl: `${root}standard_fonts/`,
+    wasmUrl: `${root}wasm/`,
+  }
 }
 
 /** 按需加载 pdf.js（浏览器带 worker，Node 测试走 legacy 主线程路径）。 */
@@ -268,6 +278,11 @@ export async function importPdf(
       // 资源一律由主线程取（pdf.js 默认的 worker 内 fetch 需要同源且能构建 URL，
       // 部署到子路径时不稳定；主线程取保证与页面同源同基址）
       useWorkerFetch: false,
+      // 位图渲染 / 扫描版会用到 wasm/ 下的 jbig2 / openjpeg / qcms，
+      // 缺资源时 page.render 不抛 ImportError 而是 NetworkError，
+      // 进不了我们析错逻辑 —— 所以 wasmUrl 必须传对。
+      cMapPacked: true,
+      disableAutoFetch: false,
     })
     doc = await task.promise
   } catch (e) {
@@ -349,31 +364,45 @@ export async function importPdf(
     try {
       for (let i = 1; i <= numPages; i++) {
         onProgress?.({ phase: '渲染扫描页', current: i, total: numPages })
-        const page = await doc.getPage(i)
-        const viewport = page.getViewport({ scale: 2.0 })
-        // 用小尺寸即可保证阅读清晰：A4 页面宽度 ~595pt，scale 2 → 1190px，足够 1080p 屏。
-        // 不让任何一页超过 MAX_DIM，避免个别超大页（图表 / 海报）撑爆内存。
-        const MAX_DIM = 2000
-        const scaleDown = Math.min(1, MAX_DIM / Math.max(viewport.width, viewport.height))
-        const finalScale = viewport.scale * scaleDown
-        const finalViewport = page.getViewport({ scale: finalScale })
+        let page: PdfPage | null = null
+        try {
+          page = await doc.getPage(i)
+          const viewport = page.getViewport({ scale: 2.0 })
+          // 用小尺寸即可保证阅读清晰：A4 页面宽度 ~595pt，scale 2 → 1190px，足够 1080p 屏。
+          // 不让任何一页超过 MAX_DIM，避免个别超大页（图表 / 海报）撑爆内存。
+          const MAX_DIM = 2000
+          const scaleDown = Math.min(1, MAX_DIM / Math.max(viewport.width, viewport.height))
+          const finalScale = viewport.scale * scaleDown
+          const finalViewport = page.getViewport({ scale: finalScale })
 
-        const canvas = globalThis.document.createElement('canvas')
-        canvas.width = Math.ceil(finalViewport.width)
-        canvas.height = Math.ceil(finalViewport.height)
-        const ctx = canvas.getContext('2d')
-        if (!ctx) {
-          throw new ImportError(`第 ${i} 页：无法创建 canvas 2d 上下文`)
+          const canvas = globalThis.document.createElement('canvas')
+          canvas.width = Math.ceil(finalViewport.width)
+          canvas.height = Math.ceil(finalViewport.height)
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            throw new ImportError(`第 ${i} 页：无法创建 canvas 2d 上下文`)
+          }
+
+          // pdf.js v6 RenderParameters：只传 canvasContext + viewport 即可，
+          // canvas 字段会自动用 canvasContext.canvas；多传反而被拒。
+          await page.render({ canvasContext: ctx, viewport: finalViewport } as never).promise
+          pageImages.push({
+            dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+            width: canvas.width,
+            height: canvas.height,
+          })
+        } catch (e) {
+          // 把这一页的真实错误抛出去 —— wasm 404 / 字体解码失败 / canvas 不支持
+          // 都不再被吞为"环境不支持"。Node 在 fallback 即使失败也会逐级上报 console。
+          const err = e as { name?: unknown; message?: unknown; stack?: unknown }
+          const name = typeof err?.name === 'string' ? err.name : ''
+          const msg = typeof err?.message === 'string' ? err.message : String(e)
+          console.error(`[pdf] 扫描页 ${i} 渲染失败:`, name, msg, '|', err?.stack ? String(err.stack).slice(0, 400) : '')
+          throw new ImportError(
+            `扫描版第 ${i} 页渲染失败`,
+            `原因：${name || 'Error'} — ${msg.slice(0, 120)}。可重试一次；若仍失败请告知作者。`,
+          )
         }
-
-        // pdf.js v6 RenderParameters：只传 canvasContext + viewport 即可，
-        // canvas 字段会自动用 canvasContext.canvas；多传反而被拒。
-        await page.render({ canvasContext: ctx, viewport: finalViewport } as never).promise
-        pageImages.push({
-          dataUrl: canvas.toDataURL('image/jpeg', 0.85),
-          width: canvas.width,
-          height: canvas.height,
-        })
       }
     } finally {
       // 与文本通道一致：每本书用完即销毁，避免 pdf.js worker 长留。
