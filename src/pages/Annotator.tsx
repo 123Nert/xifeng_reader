@@ -25,16 +25,19 @@ export interface SelInfo {
   text: string
 }
 
-/** 选中态工具栏：选色即标注，或写想法。 */
+/** 选中态工具栏：选色即标注，或写想法 / 翻译。 */
 export function SelToolbar({
   sel,
   onMark,
   onNote,
+  onTranslate,
   onClose,
 }: {
   sel: SelInfo
   onMark: (color: HighlightColor, style: MarkStyle) => void
   onNote: (color: HighlightColor, style: MarkStyle) => void
+  /** V6.4：把选中文字送去翻译（浮卡接管后续展示） */
+  onTranslate?: () => void
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -75,6 +78,11 @@ export function SelToolbar({
         <span className="style-icon style-strikeout">A</span>
       </button>
       <span className="sel-sep" />
+      {onTranslate && (
+        <button className="sel-btn" title="翻译选中文字（V6.4）" onClick={onTranslate}>
+          🌐 译
+        </button>
+      )}
       <button className="sel-btn primary" title="标注并写想法" onClick={() => onNote(lastColor, 'highlight')}>
         ✎ 写想法
       </button>

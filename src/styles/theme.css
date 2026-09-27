@@ -1290,6 +1290,145 @@ button {
   color: #fff;
 }
 
+/* ========== 划词翻译浮卡（V6.4） ========== */
+
+.translate-card {
+  position: fixed;
+  z-index: 47;
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tr-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tr-words {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tr-x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+/* 原文：默认最多 3 行，点一下展开全文 */
+.tr-source {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+  word-break: break-word;
+}
+
+.tr-source.expanded {
+  -webkit-line-clamp: unset;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.tr-body {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text);
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+  min-height: 24px;
+}
+
+.tr-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tr-error {
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 多义词的另一个常见义项：跟在主译文后面，弱化展示 */
+.tr-alt {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tr-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* 单词语境对照：整句译文（比单词单条译文更能说明"这里是什么意思"） */
+.tr-context {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.tr-ctx-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.tr-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.tr-actions:empty {
+  display: none;
+}
+
 .style-icon {
   font-size: 13px;
   line-height: 1;

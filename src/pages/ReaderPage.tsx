@@ -69,6 +69,8 @@ import {
 } from '../core/settings'
 import ReaderMenu, { type MenuTab } from './ReaderMenu'
 import { EditCard, SelToolbar, type SelInfo } from './Annotator'
+import { TranslateCard, type TranslateState } from './Translator'
+import { isWordLookup, TranslateError, translateText } from '../core/translate'
 
 /**
  * 按行切段：与正文渲染共用同一规则（V1.3 排版基础）。
@@ -177,6 +179,15 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [speaking, setSpeaking] = useState(false)
   /** 选中态工具栏信息（V4.0） */
   const [selInfo, setSelInfo] = useState<SelInfo | null>(null)
+  /** V6.4：划词翻译浮卡状态（null = 未打开） */
+  const [translate, setTranslate] = useState<TranslateState | null>(null)
+  /** 翻译请求的取消令牌：关闭浮卡/再选新词时丢弃在途请求 */
+  const translateAbortRef = useRef<AbortController | null>(null)
+  /**
+   * 最近一次"送去翻译"的选区：浮卡一打开 selInfo 就被清空（工具栏要收起来），
+   * 所以必须在这里单独留一份 —— 否则「存为想法」拿不到字符区间，只能干瞪眼。
+   */
+  const translateSelRef = useRef<SelInfo | null>(null)
   /** 点开的批注编辑卡：命中的批注（可能多条重叠）+ 当前查看索引 */
   const [editState, setEditState] = useState<{ ids: string[]; index: number } | null>(null)
   /** 跳转定位后闪烁高亮的批注 id */
@@ -619,6 +630,75 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
 
   // ---- 批注（V4.0） ----
 
+  /**
+   * V6.4：划词翻译。浮卡贴在选区上方，翻译在途时先显示"翻译中…"。
+   * 只把选中的那一段发给翻译服务；失败只影响这张卡片，阅读一切照旧。
+   */
+  const startTranslate = useCallback(
+    (sel: SelInfo) => {
+      // 取消上一次在途请求，避免旧结果盖住新选区
+      translateAbortRef.current?.abort()
+      const controller = new AbortController()
+      translateAbortRef.current = controller
+
+      // 浮卡宽度约 360px：贴选区居中，并夹在视口内不越界
+      const half = 190
+      const x = Math.min(Math.max(sel.x, half), window.innerWidth - half)
+      const y = Math.max(sel.y, 120)
+
+      translateSelRef.current = sel
+      setSelInfo(null)
+      setTranslate({ source: sel.text, x, y, result: null, error: null })
+      // 选中的单词/短语：带上它所在的整句，供翻译层在词义退化时补语境
+      const context = sentenceAround(sel.text, sel.start, sel.end)
+      void (async () => {
+        try {
+          const result = await translateText(sel.text, {
+            target: settingsRef.current.translateTarget,
+            context,
+            signal: controller.signal,
+          })
+          if (controller.signal.aborted) return
+          setTranslate((prev) => (prev ? { ...prev, result, error: null } : prev))
+        } catch (e) {
+          if (controller.signal.aborted) return
+          const err = e instanceof TranslateError ? e : null
+          setTranslate((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  result: null,
+                  error: err?.message ?? '翻译失败',
+                  hint: err?.hint,
+                }
+              : prev,
+          )
+        }
+      })()
+    },
+    [],
+  )
+
+  /** 取选区所在的整句（在正文里向前后找句末标点），供单词语境补正使用。 */
+  const sentenceAround = (selText: string, start: number, end: number): string | undefined => {
+    if (!isWordLookup(selText)) return undefined
+    const text = textRef.current
+    if (!text) return undefined
+    const STOP = /[.!?。！？\n]/
+    let from = start
+    while (from > 0 && !STOP.test(text[from - 1])) from--
+    let to = end
+    while (to < text.length && !STOP.test(text[to])) to++
+    const sentence = text.slice(from, Math.min(to + 1, from + 400))
+    return sentence.trim() || undefined
+  }
+
+  const closeTranslate = useCallback(() => {
+    translateAbortRef.current?.abort()
+    translateAbortRef.current = null
+    setTranslate(null)
+  }, [])
+
   /** 新建标注（选色/选样式立即标注；写想法则先建后聚焦输入）。 */
   const createHighlight = useCallback(
     async (
@@ -649,6 +729,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         showToast(`${HIGHLIGHT_COLOR_LABELS[color]}色${MARK_STYLE_LABELS[style]}已添加`)
       }
       void pm
+      return record
     },
     [bookId, toc.entries, showToast],
   )
@@ -661,6 +742,39 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     },
     [bookId],
   )
+
+  /**
+   * 把当前译文写进想法（note）：命中同选区的批注就追加，否则新建一条蓝色标注再写入。
+   * 这样译文能随批注一起导出 Markdown（V4.0-d）。
+   */
+  const saveTranslationAsNote = useCallback(async () => {
+    const cur = translate
+    if (!cur?.result) return
+    // 译文（含语境/另一义项）一并写入想法，导出 Markdown 时能看懂
+    const parts = [cur.result.text]
+    if (cur.result.alt) parts.push(`（也作：${cur.result.alt}）`)
+    if (cur.result.context) parts.push(`整句：${cur.result.context}`)
+    const line = parts.join('\n')
+    const sel = translateSelRef.current
+    const existing = sel
+      ? highlights.find((h) => h.start === sel.start && h.end === sel.end)
+      : undefined
+
+    if (existing) {
+      const note = existing.note ? existing.note + '\n💬 ' + line : line
+      await patchHighlight(existing.id, { note })
+      showToast('译文已写入想法')
+    } else if (sel) {
+      const created = await createHighlight(sel.start, sel.end, sel.text, 'blue', 'highlight')
+      await patchHighlight(created.id, { note: line })
+      showToast('已新建标注并写入译文')
+    } else {
+      // 选区信息不可用（例如跨页选区在切页后失效）：只复制，绝不误建标注
+      void navigator.clipboard?.writeText(line)
+      showToast('译文已复制（原选区已失效，未建标注）')
+    }
+    closeTranslate()
+  }, [translate, highlights, patchHighlight, createHighlight, showToast, closeTranslate])
 
   const removeHighlightById = useCallback(
     async (id: string) => {
@@ -1572,7 +1686,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       </footer>
 
       {/* 选中态标注工具栏（V4.0-a/b） */}
-      {selInfo && !editState && (
+      {selInfo && !editState && !translate && (
         <SelToolbar
           sel={selInfo}
           onMark={(color, style) =>
@@ -1581,7 +1695,21 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
           onNote={(color, style) =>
             void createHighlight(selInfo.start, selInfo.end, selInfo.text, color, style, true)
           }
+          onTranslate={() => void startTranslate(selInfo)}
           onClose={() => setSelInfo(null)}
+        />
+      )}
+
+      {/* 划词翻译浮卡（V6.4） */}
+      {translate && (
+        <TranslateCard
+          state={translate}
+          onCopy={(text) => {
+            void navigator.clipboard?.writeText(text)
+            showToast('已复制译文')
+          }}
+          onSaveNote={() => void saveTranslationAsNote()}
+          onClose={() => setTranslate(null)}
         />
       )}
 
@@ -1655,6 +1783,13 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         onCustomFontFile={(file) => void handleCustomFont(file)}
         onAutoSeconds={(s) => updateTypography({ autoPageSeconds: s })}
         onPageMode={(m) => updateTypography({ pageMode: m })}
+        onTranslateTarget={(t) => {
+          // 翻译语言只影响下一次划词，不涉排版 → 轻量更新（不重排、阅读位置不动）
+          const next = { ...settings, translateTarget: t }
+          settingsRef.current = next
+          setSettings(next)
+          saveSettings(next)
+        }}
       />
 
       {toast && <div className="toast">{toast}</div>}

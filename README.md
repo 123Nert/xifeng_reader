@@ -1,7 +1,7 @@
 # xifeng 阅读
 
 [![version](https://img.shields.io/github/v/tag/123Nert/xifeng_reader?label=version)](https://github.com/123Nert/xifeng_reader/tags)
-[![tests](https://img.shields.io/badge/tests-222%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-261%20passing-brightgreen)](src)
 [![PWA](https://img.shields.io/badge/PWA-ready-blueviolet)](vite.config.ts)
 
 本地电子书阅读器（Web 应用）。核心闭环：**导入一本书 → 舒服地读完 → 下次打开接着读**。
@@ -19,10 +19,25 @@
 - 排版：字号、行距、段距、页边距、首行缩进、两端对齐、字体预设与自定义字体
 - 主题：日间 / 护眼 / 夜间
 - 导航：章节目录（内置 + 自定义正则）、书签、全文搜索（页面内高亮）、划线笔记（可导出 Markdown，见 [V4.0 方案](docs/V4.0-批注与笔记方案.md)）
+- 划词翻译（V6.4）：选中英文即出中文（单词给义项 + 所在整句对照），可一键存为想法；目标语言可设（见 [V6.4 方案](docs/V6.4-划词翻译方案.md)）
 - 进度自动保存，重新打开精确续读；进度条拖动跳转任意位置
 - PWA 可安装，离线可读；备份导出 / 导入（全量 JSON，含 PDF 原件）
 
 ## 当前版本
+
+**V6.4 划词翻译** ✅
+
+- 选中文字 → 浮动工具栏多一个「🌐 译」→ 浮卡出译文；英文书直接译成中文，
+  中文内容也能译成英文（目标语言可固定，默认自动判断）。
+- **单词不糊弄**：动名词/分词（beginning/running）机器翻译只给词源义，
+  本地表补上常见义；多义词（bank）保留接口结果并附「也作：岸」；
+  再补一次**所在整句**的翻译做语境对照 —— 英文书里 `beginning` 在上下文里是什么意思，一眼就懂。
+- 长段落自动按句切分（免费接口单次 500 字符上限）；同一段重复选中走缓存不重复请求；
+  接口挂了只影响这张浮卡，阅读 / 批注 / 续读一切照旧。
+- 「存为想法」把译文写进批注 note，随 Markdown 一起导出。
+- 实测样本：Gutenberg 公版《Alice's Adventures in Wonderland》（英文，14.8 万字符，随仓入库）。
+
+完整设计、接口选型实测与取舍见 [docs/V6.4-划词翻译方案.md](docs/V6.4-划词翻译方案.md)。
 
 **V6.3 书架封面（每本书的第一页）** ✅
 
@@ -52,7 +67,8 @@
 
 | 版本 | 主题 | 标记 |
 | --- | --- | --- |
-| v6.3.0 | 书架封面（每本书的第一页） | ✅ 当前 |
+| v6.4.0 | 划词翻译（英文→中文，含单词语境） | ✅ 当前 |
+| v6.3.0 | 书架封面（每本书的第一页） | ✅ |
 | v6.2.0 | PDF 原版阅读（原文件入库 + 按需渲染 + 双视图） | ✅ |
 | v6.1.0 | 扫描版 PDF 按页位图阅读 | ✅ |
 | v6.0.0 | PDF 支持（pdf.js 按需加载） | ✅ |
@@ -71,7 +87,7 @@
 ```bash
 npm install
 npm run dev        # 开发（http://localhost:5173）
-npm run test       # Vitest 单元测试（222 例）
+npm run test       # Vitest 单元测试（261 例）
 npm run build      # 产出纯静态文件到 dist/
 npm run preview    # 本地预览构建产物
 ```
@@ -105,6 +121,7 @@ src/
   ├─ pdfNav.ts              # PDF 页码 ↔ 字符偏移换算
 │  ├─ pdfOriginal.ts         # PDF 原版页面按需渲染（清晰度/内存上限/取消）
 │  ├─ scanView.ts            # 位图等比显示几何（缩放不变形）
+  ├─ translate.ts           # 划词翻译：方向判断/切分/缓存/单词兜底义
 │  └─ settings.ts            # 阅读设置（localStorage + CSS 变量）
 └─ styles/theme.css          # CSS 变量主题（日间/护眼/夜间）
 ```
@@ -123,3 +140,4 @@ src/
 - [docs/V6.1-修复记录.md](docs/V6.1-修复记录.md) — PDF 导入失败三连修 + 扫描版位图被进度条遮挡的根因与验证
 - [docs/V6.2-PDF原版阅读方案.md](docs/V6.2-PDF原版阅读方案.md) — 原文件入库 + 读时按需渲染 + 原版/文字双视图
 - [docs/V6.3-书架封面方案.md](docs/V6.3-书架封面方案.md) — 每本书的第一页当封面：各格式来源、排版规则与实测
+- [docs/V6.4-划词翻译方案.md](docs/V6.4-划词翻译方案.md) — 划词翻译：接口实测选型、单词翻译的坑与对策

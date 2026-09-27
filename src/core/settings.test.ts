@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   clampFontSize,
   clampScanZoom,
+  clampTranslateTarget,
   loadSettings,
   nextLineHeight,
   nextMargin,
@@ -46,6 +47,7 @@ const DEFAULTS: ReaderSettings = {
   autoPageSeconds: 10,
   pageMode: 'paged',
   scanZoom: 1,
+  translateTarget: 'auto',
 }
 
 describe('settings: 读写', () => {
@@ -67,6 +69,7 @@ describe('settings: 读写', () => {
       autoPageSeconds: 5,
       pageMode: 'scroll',
       scanZoom: 2,
+      translateTarget: 'zh-CN',
     }
     const storage = makeStorage()
     saveSettings(s, storage)
@@ -162,6 +165,14 @@ describe('settings: 取值域', () => {
     expect(clampScanZoom(99)).toBe(SCAN_ZOOM_MAX)
     expect(clampScanZoom(-3)).toBe(1)
     expect(clampScanZoom(NaN)).toBe(1)
+  })
+
+  it('translateTarget 只接受合法值，其余回退 auto', () => {
+    expect(clampTranslateTarget('zh-CN')).toBe('zh-CN')
+    expect(clampTranslateTarget('en')).toBe('en')
+    expect(clampTranslateTarget('fr')).toBe('auto')
+    expect(clampTranslateTarget(undefined)).toBe('auto')
+    expect(clampTranslateTarget(42)).toBe('auto')
   })
 
   it('旧版本数据（缺少 scanZoom）回退默认值 1', () => {

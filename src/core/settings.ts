@@ -1,3 +1,5 @@
+import { TRANSLATE_TARGETS, type TranslateTarget } from './translate'
+
 /**
  * settings.ts — 阅读设置读写（localStorage，全局生效）。
  *
@@ -5,8 +7,12 @@
  *   fontSize, lineHeight, theme,
  *   paraSpacing, pageMargin, indent, align,   // V1.3 排版
  *   fontFamily, customFontName,               // V1.3 字体
+ *   translateTarget,                          // V6.4 划词翻译目标语言
  * }。
  */
+
+// V6.4：划词翻译目标语言的定义在 core/translate.ts，这里只做设置项读写
+export { TRANSLATE_TARGETS, TRANSLATE_TARGET_LABELS, type TranslateTarget } from './translate'
 
 export interface ReaderSettings {
   fontSize: number
@@ -30,6 +36,8 @@ export interface ReaderSettings {
   pageMode: PageModeName
   /** V6.1：扫描版 PDF 位图缩放（1 = 适应视口，可放大到 3） */
   scanZoom: number
+  /** V6.4：划词翻译的目标语言（auto = 英文→中文、中文→英文） */
+  translateTarget: TranslateTarget
 }
 
 export const FONT_MIN = 14
@@ -119,6 +127,11 @@ export function clampScanZoom(z: number): number {
   return Math.min(SCAN_ZOOM_MAX, Math.max(SCAN_ZOOM_MIN, Math.round(z * 2) / 2))
 }
 
+/** 目标语言只接受三个合法值，其余回退 auto（兼容旧数据）。 */
+export function clampTranslateTarget(v: unknown): TranslateTarget {
+  return TRANSLATE_TARGETS.includes(v as TranslateTarget) ? (v as TranslateTarget) : 'auto'
+}
+
 const STORAGE_KEY = 'xifeng.settings'
 
 export function clampFontSize(size: number): number {
@@ -145,6 +158,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
     autoPageSeconds: AUTO_PAGE_DEFAULT,
     pageMode: PAGE_MODE_DEFAULT,
     scanZoom: SCAN_ZOOM_DEFAULT,
+    translateTarget: 'auto',
   }
   try {
     const raw = storage.getItem(STORAGE_KEY)
@@ -182,6 +196,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
           ? (p.pageMode as PageModeName)
           : fallback.pageMode,
         scanZoom: clampScanZoom(Number(p.scanZoom)),
+        translateTarget: clampTranslateTarget(p.translateTarget),
       }
     }
   } catch {

@@ -16,12 +16,15 @@ import {
   PAGE_MODE_LABELS,
   PAGE_MODE_NAMES,
   PARA_SPACING_LABELS,
+  TRANSLATE_TARGETS,
+  TRANSLATE_TARGET_LABELS,
   PARA_SPACING_STEPS,
   THEME_LABELS,
   THEME_NAMES,
   type FontFamilyName,
   type PageModeName,
   type ReaderSettings,
+  type TranslateTarget,
   type ThemeName,
 } from '../core/settings'
 
@@ -65,6 +68,8 @@ interface Props {
   onCustomFontFile: (file: File) => void
   onAutoSeconds: (seconds: number) => void
   onPageMode: (mode: PageModeName) => void
+  /** V6.4：划词翻译的目标语言 */
+  onTranslateTarget: (target: TranslateTarget) => void
 }
 
 const TABS: Array<{ key: MenuTab; label: string }> = [
@@ -351,6 +356,21 @@ function SettingsPane(props: Props) {
               onClick={() => props.onPageMode(m)}
             >
               {PAGE_MODE_LABELS[m]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">划词翻译</span>
+        <div className="set-value">
+          {TRANSLATE_TARGETS.map((t) => (
+            <button
+              key={t}
+              className={`btn chip${settings.translateTarget === t ? ' active' : ''}`}
+              onClick={() => props.onTranslateTarget(t)}
+              title={TRANSLATE_TARGET_LABELS[t]}
+            >
+              {t === 'auto' ? '自动' : t === 'zh-CN' ? '译为中文' : '译为英文'}
             </button>
           ))}
         </div>
