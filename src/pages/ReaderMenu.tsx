@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Toc } from '../core/toc'
 import type { BookmarkRecord } from '../core/bookRepository'
 import type { HighlightRecord } from '../core/highlight'
+import type { VocabRecord } from '../core/vocabulary'
 import { NotesList } from './Annotator'
 import type { SearchHit } from '../core/search'
 import {
@@ -28,7 +29,7 @@ import {
   type ThemeName,
 } from '../core/settings'
 
-export type MenuTab = 'toc' | 'marks' | 'notes' | 'search' | 'settings'
+export type MenuTab = 'toc' | 'marks' | 'notes' | 'vocab' | 'search' | 'settings'
 
 interface Props {
   open: boolean
@@ -53,6 +54,12 @@ interface Props {
   chapterTitles: string[]
   unresolvedIds: Set<string>
 
+  /** V6.6：生词本 */
+  vocabList: VocabRecord[]
+  onDeleteVocab: (word: string) => void
+  onExportVocabMd: () => void
+  onExportVocabCsv: () => void
+
   onJumpOffset: (charIndex: number) => void
   onSearch: (query: string) => SearchHit[]
 
@@ -76,6 +83,7 @@ const TABS: Array<{ key: MenuTab; label: string }> = [
   { key: 'toc', label: '目录' },
   { key: 'marks', label: '书签' },
   { key: 'notes', label: '笔记' },
+  { key: 'vocab', label: '生词' },
   { key: 'search', label: '搜索' },
   { key: 'settings', label: '设置' },
 ]
@@ -218,6 +226,91 @@ export default function ReaderMenu(props: Props) {
               onExport={props.onExportNotes}
               unresolvedIds={props.unresolvedIds}
             />
+          )}
+
+          {tab === 'vocab' && (
+            <div className="bm-list">
+              <div className="bm-toolbar">
+                <span className="toc-count">共 {props.vocabList.length} 个生词</span>
+                {props.vocabList.length > 0 && (
+                  <div className="bm-actions" style={{ display: 'flex', gap: '6px' }}>
+                    <button className="btn chip" title="导出 Markdown 格式笔记" onClick={props.onExportVocabMd}>
+                      导出 MD
+                    </button>
+                    <button className="btn chip" title="导出 CSV 格式（可导入 Anki）" onClick={props.onExportVocabCsv}>
+                      导出 Anki CSV
+                    </button>
+                  </div>
+                )}
+              </div>
+              {props.vocabList.length === 0 ? (
+                <div className="menu-empty">还没有收藏生词，查词时点「★ 生词」即可加入</div>
+              ) : (
+                props.vocabList.map((v) => (
+                  <div
+                    key={v.word}
+                    className="bm-item vocab-item"
+                    onClick={() => props.onJumpOffset(v.charIndex)}
+                  >
+                    <div className="bm-main">
+                      <div className="vocab-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <strong className="vocab-word" style={{ fontSize: '15px', color: 'var(--fg)' }}>
+                          {v.word}
+                        </strong>
+                        {v.lookups > 1 && (
+                          <span
+                            className="vocab-count-badge"
+                            style={{
+                              fontSize: '11px',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              background: 'var(--accent-soft)',
+                              color: 'var(--accent)',
+                            }}
+                          >
+                            查过 {v.lookups} 次
+                          </span>
+                        )}
+                      </div>
+                      <span className="toc-percent">{pct(v.charIndex)}</span>
+                    </div>
+                    <div className="vocab-gloss" style={{ marginTop: '4px', fontSize: '13px', color: 'var(--fg)' }}>
+                      {v.gloss}
+                      {v.alt && (
+                        <span style={{ color: 'var(--muted)', marginLeft: '6px' }}>（也作：{v.alt}）</span>
+                      )}
+                    </div>
+                    {(v.context || v.excerpt) && (
+                      <div
+                        className="vocab-context"
+                        style={{
+                          marginTop: '4px',
+                          fontSize: '12px',
+                          color: 'var(--muted)',
+                          lineHeight: '1.4',
+                          borderLeft: '2px solid var(--border)',
+                          paddingLeft: '6px',
+                        }}
+                      >
+                        {v.excerpt && <div>“{v.excerpt}”</div>}
+                        {v.context && v.context !== v.gloss && <div>整句：{v.context}</div>}
+                      </div>
+                    )}
+                    <div className="bm-sub">{new Date(v.lastLookupAt).toLocaleDateString()}</div>
+                    <button
+                      className="bm-delete"
+                      title="移出生词本"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        props.onDeleteVocab(v.word)
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           )}
 
           {tab === 'search' && (

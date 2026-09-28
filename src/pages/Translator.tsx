@@ -20,12 +20,15 @@ export interface TranslateState {
   error: string | null
   /** 失败时的一句话建议 */
   hint?: string
+  /** V6.6：该词是否已被收入生词本 */
+  vocabSaved?: boolean
 }
 
 export function TranslateCard({
   state,
   cardRef,
   onSaveNote,
+  onSaveVocab,
   onCopy,
   onClose,
 }: {
@@ -34,6 +37,8 @@ export function TranslateCard({
   cardRef?: RefObject<HTMLDivElement>
   /** 把译文写进这条批注的想法（V4.0 的 note 字段） */
   onSaveNote: () => void
+  /** V6.6：收藏到生词本 */
+  onSaveVocab?: () => void
   onCopy: (text: string) => void
   onClose: () => void
 }) {
@@ -67,6 +72,7 @@ export function TranslateCard({
         <span className="tr-badge">
           {state.result ? (state.result.target === 'en' ? '中 → 英' : '英 → 中') : '翻译'}
         </span>
+        {state.vocabSaved && <span className="tr-badge vocab" title="已收录在生词本">★ 生词</span>}
         {words.length > 1 && <span className="tr-words">{words.join(' · ')}</span>}
         <button className="tr-x" title="关闭（Esc）" onClick={onClose}>
           ✕
@@ -113,6 +119,16 @@ export function TranslateCard({
       <div className="tr-actions">
         {state.result && (
           <>
+            {wordMode && onSaveVocab && (
+              <button
+                className={`sel-btn${state.vocabSaved ? ' active' : ''}`}
+                onClick={onSaveVocab}
+                disabled={state.vocabSaved}
+                title={state.vocabSaved ? '已在生词本' : '收藏到生词本（V6.6）'}
+              >
+                {state.vocabSaved ? '已在生词本 ✓' : '★ 生词'}
+              </button>
+            )}
             <button className="sel-btn" onClick={() => onCopy(state.result!.text)}>
               复制译文
             </button>

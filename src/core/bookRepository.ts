@@ -19,6 +19,7 @@ import {
   type HighlightRecord,
   type MarkStyle,
 } from './highlight'
+import type { VocabRecord } from './vocabulary'
 
 export interface BookRecord {
   id: string
@@ -74,6 +75,8 @@ export interface DayStatRecord {
 // V4.0：批注模型（颜色/样式/锚定）见 core/highlight.ts，此处再导出便于调用方单点引入
 export type { HighlightRecord } from './highlight'
 export { normalizeHighlight } from './highlight'
+// V6.6：生词模型见 core/vocabulary.ts，此处再导出
+export type { VocabRecord } from './vocabulary'
 
 
 /** 书库列表项：书籍元信息 + 合并后的阅读进度，不含正文。 */
@@ -117,6 +120,12 @@ interface XifengDB extends DBSchema {
   /** V6.2：PDF 原始文件字节。存原件而不是预渲染位图：存储 ≈ 原文件大小，
    *  阅读时按需渲染，放大到多少倍都能重新按目标分辨率画（字迹不糊）。 */
   pdfFiles: { key: string; value: PdfFileRecord }
+  /** V6.6：生词本。主键是归一化后的词（同词跨书唯一），by-book 索引做书内过滤。 */
+  vocab: {
+    key: string
+    value: VocabRecord
+    indexes: { 'by-book': string }
+  }
 }
 
 /** V6.1 扫描版 PDF 一页的位图。key 用 [bookId, page] 展开，便于读当前页/全删/遍历。 */
@@ -139,7 +148,7 @@ export interface PdfFileRecord {
 }
 
 const DB_NAME = 'xifeng-reader'
-const DB_VERSION = 6
+const DB_VERSION = 7
 
 let dbPromise: Promise<IDBPDatabase<XifengDB>> | null = null
 
@@ -176,6 +185,12 @@ function getDB(): Promise<IDBPDatabase<XifengDB>> {
           // V6.2：PDF 原件（整份字节）。阅读时按需渲染原版页 ——
           // 存原件而非预渲染位图：占用 ≈ 原文件大小，放大后可重新高清渲染。
           db.createObjectStore('pdfFiles', { keyPath: 'bookId' })
+        }
+        if (oldVersion < 7) {
+          // V6.6：生词本。主键 = 归一化后的词（同词唯一，浮卡可 O(1) 查收藏态），
+          // by-book 索引做"当前这本书的生词"过滤与删书级联。
+          const store = db.createObjectStore('vocab', { keyPath: 'word' })
+          store.createIndex('by-book', 'bookId')
         }
       },
     })
@@ -276,13 +291,15 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
 
 export async function deleteBook(id: string): Promise<void> {
   const db = await getDB()
-  const tx = db.transaction(['books', 'progress', 'pdfPages', 'pdfFiles'], 'readwrite')
+  const tx = db.transaction(['books', 'progress', 'pdfPages', 'pdfFiles', 'vocab'], 'readwrite')
   await Promise.all([
     tx.objectStore('books').delete(id),
     tx.objectStore('progress').delete(id),
     // 原版页/原件一并清掉，避免删书后 IndexedDB 还残留长尾存储
     deletePdfPagesFromStore(id, tx.objectStore('pdfPages') as IDBPObjectStore<XifengDB, ['pdfPages'], 'pdfPages', 'readwrite'>),
     tx.objectStore('pdfFiles').delete(id),
+    // V6.6：书没了，这本书收的生词也不再跳转得回，一并清掉
+    deleteVocabFromStore(id, tx.objectStore('vocab')),
     tx.done,
   ])
 }
@@ -358,6 +375,56 @@ export async function updateBookTocPattern(id: string, pattern: string): Promise
   if (trimmed) book.tocPattern = trimmed
   else delete book.tocPattern
   await db.put('books', book)
+}
+
+// ---------- 生词本（V6.6） ----------
+
+/** 写入/覆盖一条生词（同词主键覆盖；重复收藏的 lookups 合并由调用方先算好）。 */
+export async function addVocabRecord(record: VocabRecord): Promise<VocabRecord> {
+  const db = await getDB()
+  await db.put('vocab', record)
+  return record
+}
+
+/** 查某个词收过没有（浮卡打开时的"已收藏"态）。 */
+export async function getVocabRecord(word: string): Promise<VocabRecord | undefined> {
+  const db = await getDB()
+  return db.get('vocab', word)
+}
+
+/** 某本书的生词，按最近收藏时间倒序（阅读菜单「生词」页签）。 */
+export async function listVocabByBook(bookId: string): Promise<VocabRecord[]> {
+  const db = await getDB()
+  const list = await db.getAllFromIndex('vocab', 'by-book', bookId)
+  return list.sort((a, b) => b.lastLookupAt - a.lastLookupAt)
+}
+
+/** 全量生词，按最近收藏时间倒序（导出用）。 */
+export async function listVocabAll(): Promise<VocabRecord[]> {
+  const db = await getDB()
+  const list = await db.getAll('vocab')
+  return list.sort((a, b) => b.lastLookupAt - a.lastLookupAt)
+}
+
+export async function deleteVocabRecord(word: string): Promise<void> {
+  const db = await getDB()
+  await db.delete('vocab', word)
+}
+
+/** 删除某本书的全部生词（deleteBook 级联用）。 */
+export async function deleteVocabByBook(bookId: string): Promise<void> {
+  const db = await getDB()
+  const tx = db.transaction('vocab', 'readwrite')
+  await deleteVocabFromStore(bookId, tx.objectStore('vocab'))
+  await tx.done
+}
+
+async function deleteVocabFromStore(
+  bookId: string,
+  store: IDBPObjectStore<XifengDB, any, 'vocab', 'readwrite'>,
+): Promise<void> {
+  const keys = await store.index('by-book').getAllKeys(IDBKeyRange.only(bookId))
+  for (const k of keys) await store.delete(k)
 }
 
 // ---------- 书签（V1.2） ----------
@@ -553,6 +620,8 @@ export interface BackupData {
   stats: DayStatRecord[]
   highlights: HighlightRecord[]
   settings: unknown | null
+  /** V6.6：生词本（缺省 = 老备份，照常导入） */
+  vocab?: VocabRecord[]
   /** V6.3：PDF 原件（base64）。缺省表示这份备份不含原件，导入后 PDF 只能看文字。 */
   pdfFiles?: Array<{ bookId: string; bytes: string; size: number }>
 }
@@ -571,6 +640,7 @@ export async function exportBackup(settings: unknown): Promise<BackupData> {
     stats: await db.getAll('stats'),
     highlights: await db.getAll('highlights'),
     settings,
+    vocab: await db.getAll('vocab'),
     pdfFiles: files.map((f) => ({
       bookId: f.bookId,
       bytes: encodeBytesToBase64(f.bytes),
@@ -585,6 +655,7 @@ export interface ImportReport {
   bookmarks: number
   stats: number
   highlights: number
+  vocab: number
   pdfFiles: number
 }
 
@@ -595,7 +666,7 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
   }
   const db = await getDB()
   const tx = db.transaction(
-    ['books', 'progress', 'bookmarks', 'stats', 'highlights', 'pdfFiles'],
+    ['books', 'progress', 'bookmarks', 'stats', 'highlights', 'pdfFiles', 'vocab'],
     'readwrite',
   )
   for (const b of data.books ?? []) await tx.objectStore('books').put(b)
@@ -608,6 +679,10 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
   }
   for (const h of data.highlights ?? []) {
     if (h && h.id && h.bookId != null) await tx.objectStore('highlights').put(h)
+  }
+  // V6.6：生词随备份走（主键=词，覆盖合并）。老备份没有该字段不算错误。
+  for (const v of data.vocab ?? []) {
+    if (v && v.word && v.bookId != null) await tx.objectStore('vocab').put(v)
   }
   // V6.3：PDF 原件随备份走（base64 字符串 → 还原成 ArrayBuffer）。
   // 老备份没有该字段，或某本书没带原件 —— 都不算错误，只是那本仍需重新导入。
@@ -625,6 +700,7 @@ export async function importBackup(data: BackupData): Promise<ImportReport> {
     bookmarks: data.bookmarks?.length ?? 0,
     stats: data.stats?.length ?? 0,
     highlights: data.highlights?.length ?? 0,
+    vocab: data.vocab?.length ?? 0,
     pdfFiles,
   }
 }

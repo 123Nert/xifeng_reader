@@ -362,3 +362,96 @@ describe('bookRepository: PDF 原件（V6.2）', () => {
     expect(await repo.getPdfFile('p7')).toBeUndefined()
   })
 })
+
+// ---------- V6.6 生词本 ----------
+
+describe('bookRepository: 生词本（V6.6）', () => {
+  const sampleVocab = (word: string, bookId: string, lastLookupAt = 1000) => ({
+    word,
+    bookId,
+    charIndex: 50,
+    excerpt: `excerpt for ${word}`,
+    gloss: `释义 ${word}`,
+    lookups: 1,
+    createdAt: 1000,
+    lastLookupAt,
+  })
+
+  it('添加与查询生词，支持按书查询与时间倒序', async () => {
+    await repo.addVocabRecord(sampleVocab('novel', 'b1', 1000))
+    await repo.addVocabRecord(sampleVocab('author', 'b1', 2000))
+    await repo.addVocabRecord(sampleVocab('other', 'b2', 1500))
+
+    expect(await repo.getVocabRecord('novel')).toBeTruthy()
+    expect(await repo.getVocabRecord('nonexistent')).toBeUndefined()
+
+    const b1List = await repo.listVocabByBook('b1')
+    expect(b1List).toHaveLength(2)
+    // 最近查词的在前
+    expect(b1List[0].word).toBe('author')
+    expect(b1List[1].word).toBe('novel')
+
+    const all = await repo.listVocabAll()
+    expect(all).toHaveLength(3)
+    expect(all[0].word).toBe('author')
+  })
+
+  it('同词覆盖更新', async () => {
+    await repo.addVocabRecord(sampleVocab('bank', 'b1', 1000))
+    const updated = {
+      ...sampleVocab('bank', 'b2', 3000),
+      gloss: '河岸；堤',
+      lookups: 2,
+    }
+    await repo.addVocabRecord(updated)
+
+    const got = await repo.getVocabRecord('bank')
+    expect(got?.lookups).toBe(2)
+    expect(got?.bookId).toBe('b2')
+    expect(got?.gloss).toBe('河岸；堤')
+  })
+
+  it('deleteVocabRecord 单条删除', async () => {
+    await repo.addVocabRecord(sampleVocab('del', 'b1'))
+    await repo.deleteVocabRecord('del')
+    expect(await repo.getVocabRecord('del')).toBeUndefined()
+  })
+
+  it('deleteBook 级联清除该书关联的生词', async () => {
+    await repo.addBook(book('del-book', '正文'))
+    await repo.addVocabRecord(sampleVocab('w1', 'del-book'))
+    await repo.addVocabRecord(sampleVocab('w2', 'del-book'))
+    await repo.addVocabRecord(sampleVocab('w3', 'other-book'))
+
+    await repo.deleteBook('del-book')
+
+    expect(await repo.listVocabByBook('del-book')).toHaveLength(0)
+    expect(await repo.getVocabRecord('w1')).toBeUndefined()
+    expect(await repo.getVocabRecord('w2')).toBeUndefined()
+    // 其它书的生词依然保留
+    expect(await repo.getVocabRecord('w3')).toBeTruthy()
+  })
+
+  it('备份导出与导入还原生词本（含老备份兼容）', async () => {
+    await repo.addBook(book('bk-v', '正文'))
+    await repo.addVocabRecord(sampleVocab('vocab1', 'bk-v'))
+
+    const backup = await repo.exportBackup(null)
+    expect(backup.vocab).toHaveLength(1)
+    expect(backup.vocab?.[0].word).toBe('vocab1')
+
+    // 清库后导入
+    vi.resetModules()
+    globalThis.indexedDB = new IDBFactory()
+    repo = await import('./bookRepository')
+
+    const report = await repo.importBackup(backup)
+    expect(report.vocab).toBe(1)
+    expect(await repo.getVocabRecord('vocab1')).toBeTruthy()
+
+    // 测试老备份（无 vocab 字段）兼容性
+    delete backup.vocab
+    const reportOld = await repo.importBackup(backup)
+    expect(reportOld.vocab).toBe(0)
+  })
+})

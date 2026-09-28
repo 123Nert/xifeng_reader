@@ -50,9 +50,22 @@ import {
   updateHighlight,
   saveProgress,
   updateBookTocPattern,
+  addVocabRecord,
+  getVocabRecord,
+  listVocabByBook,
+  deleteVocabRecord,
   type BookmarkRecord,
   type PdfPageRecord,
+  type VocabRecord,
 } from '../core/bookRepository'
+import {
+  buildVocabRecord,
+  isVocabCandidate,
+  mergeVocabOnRecollection,
+  normalizeWord,
+  vocabToCsv,
+  vocabToMarkdown,
+} from '../core/vocabulary'
 import {
   applySettingsToDocument,
   clampFontSize,
@@ -180,6 +193,8 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [patternDraft, setPatternDraft] = useState('')
   const [bookmarks, setBookmarks] = useState<BookmarkRecord[]>([])
   const [highlights, setHighlights] = useState<HighlightRecord[]>([])
+  /** V6.6：当前书收藏的生词列表 */
+  const [vocabList, setVocabList] = useState<VocabRecord[]>([])
   const [hlQuery, setHlQuery] = useState<string | null>(null)
   const [autoPlaying, setAutoPlaying] = useState(false)
   const [speaking, setSpeaking] = useState(false)
@@ -306,6 +321,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         )
         setBookmarks(await listBookmarks(bookId))
         setHighlights(await listHighlights(bookId))
+        setVocabList(await listVocabByBook(bookId))
         setTotalChars(book.content.length) // 文字视图的字符总数（扫描版为 0）
         // 页码 ↔ 字符偏移换算表：原版翻页 / 跳转 / 续读靠它对齐文字坐标系。
         // 只有带文字层的 PDF 才有可用的偏移表 —— 纯图 PDF 的页起点全是 0，
@@ -378,6 +394,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       )
       setPatternDraft(book.tocPattern ?? '')
       setBookmarks(await listBookmarks(bookId))
+      setVocabList(await listVocabByBook(bookId))
       // 批注：加载后做三层锚定校验，正文变更（如重新净化导入）时自动修复位置
       const loaded = await listHighlights(bookId)
       const tocEntries = buildToc(book.content, book.tocPattern).entries
@@ -674,7 +691,16 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       // 指针对照基准重置：以浮卡出现的这一刻为起点，之后才谈得上"移开"
       pointerRef.current.lastMoveAt = null
       setSelInfo(null)
-      setTranslate({ source: sel.text, x, y, result: null, error: null })
+      const isWord = isVocabCandidate(sel.text)
+      const norm = isWord ? normalizeWord(sel.text) : ''
+      setTranslate({ source: sel.text, x, y, result: null, error: null, vocabSaved: false })
+      if (isWord && norm) {
+        void getVocabRecord(norm).then((rec) => {
+          if (rec && !controller.signal.aborted) {
+            setTranslate((prev) => (prev ? { ...prev, vocabSaved: true } : prev))
+          }
+        })
+      }
       // 选中的单词/短语：带上它所在的整句，供翻译层在词义退化时补语境
       const context = sentenceAround(sel.text, sel.start, sel.end)
       void (async () => {
@@ -853,6 +879,83 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
     }
     closeTranslate()
   }, [translate, highlights, patchHighlight, createHighlight, showToast, closeTranslate])
+
+  /**
+   * V6.6：收藏生词。
+   * 记录单词、主释义、另一义项、整句语境与出处偏移；
+   * 重复收藏时自动累加 lookups 并刷新为最近语境（对标 KOReader）。
+   */
+  const handleSaveVocab = useCallback(async () => {
+    const cur = translate
+    if (!cur?.result) return
+    const sel = translateSelRef.current
+    if (!sel) return
+    const norm = normalizeWord(cur.source)
+    if (!norm) return
+
+    const sentence = sentenceAround(cur.source, sel.start, sel.end)
+    const candidate = buildVocabRecord({
+      source: cur.source,
+      bookId,
+      charIndex: sel.start,
+      sentence,
+      result: cur.result,
+    })
+    const existing = await getVocabRecord(norm)
+    const finalRecord = existing ? mergeVocabOnRecollection(existing, candidate) : candidate
+    await addVocabRecord(finalRecord)
+    setVocabList(await listVocabByBook(bookId))
+    setTranslate((prev) => (prev ? { ...prev, vocabSaved: true } : prev))
+    showToast(
+      existing
+        ? `已更新生词「${norm}」语境（第 ${finalRecord.lookups} 次查词）`
+        : `已加入生词本「${norm}」`,
+    )
+  }, [translate, bookId, showToast])
+
+  const handleDeleteVocab = useCallback(
+    async (word: string) => {
+      await deleteVocabRecord(word)
+      setVocabList(await listVocabByBook(bookId))
+      if (translate && normalizeWord(translate.source) === word) {
+        setTranslate((prev) => (prev ? { ...prev, vocabSaved: false } : prev))
+      }
+      showToast(`已将「${word}」移出生词本`)
+    },
+    [bookId, translate, showToast],
+  )
+
+  const handleExportVocabMd = useCallback(() => {
+    if (vocabList.length === 0) {
+      showToast('生词本还是空的')
+      return
+    }
+    const md = vocabToMarkdown(vocabList, title)
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${title || '生词本'}-生词.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast(`已导出 ${vocabList.length} 个生词`)
+  }, [vocabList, title, showToast])
+
+  const handleExportVocabCsv = useCallback(() => {
+    if (vocabList.length === 0) {
+      showToast('生词本还是空的')
+      return
+    }
+    const csv = vocabToCsv(vocabList)
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${title || '生词本'}-Anki.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast(`已导出 ${vocabList.length} 个生词到 CSV`)
+  }, [vocabList, title, showToast])
 
   const removeHighlightById = useCallback(
     async (id: string) => {
@@ -1760,6 +1863,9 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
             <button className="btn chip" onClick={() => openMenu('marks')}>
               书签
             </button>
+            <button className="btn chip" onClick={() => openMenu('vocab')}>
+              生词
+            </button>
             <button className="btn chip" onClick={() => openMenu('search')}>
               搜索
             </button>
@@ -1795,6 +1901,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
             showToast('已复制译文')
           }}
           onSaveNote={() => void saveTranslationAsNote()}
+          onSaveVocab={() => void handleSaveVocab()}
           onClose={() => setTranslate(null)}
         />
       )}
@@ -1853,6 +1960,10 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
         bookmarks={bookmarks}
         onAddBookmark={() => void handleAddBookmark()}
         onDeleteBookmark={(id) => void handleDeleteBookmark(id)}
+        vocabList={vocabList}
+        onDeleteVocab={(w) => void handleDeleteVocab(w)}
+        onExportVocabMd={handleExportVocabMd}
+        onExportVocabCsv={handleExportVocabCsv}
         onJumpOffset={jumpToOffset}
         onSearch={handleSearch}
         settings={settings}

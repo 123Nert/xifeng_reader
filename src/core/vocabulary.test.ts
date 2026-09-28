@@ -1,0 +1,189 @@
+/**
+ * vocabulary.test.ts — 生词本纯函数单测（V6.6）。
+ *
+ * 覆盖：归一化、候选判定、记录组装、重复合并、Markdown 与 CSV 导出。
+ */
+import { describe, expect, it } from 'vitest'
+import {
+  buildVocabRecord,
+  CONTEXT_MAX_CHARS,
+  isVocabCandidate,
+  mergeVocabOnRecollection,
+  normalizeWord,
+  vocabToCsv,
+  vocabToMarkdown,
+  type VocabRecord,
+} from './vocabulary'
+
+describe('vocabulary: 单词归一化', () => {
+  it('转为小写并剥除首尾常见标点与引号壳', () => {
+    expect(normalizeWord('"Hello"')).toBe('hello')
+    expect(normalizeWord("'World'")).toBe('world')
+    expect(normalizeWord('“Chapter”')).toBe('chapter')
+    expect(normalizeWord('—beginning—')).toBe('beginning')
+    expect(normalizeWord(' (Word)? ')).toBe('word')
+  })
+
+  it('保留词内合法的连字符与省字号', () => {
+    expect(normalizeWord('state-of-the-art')).toBe('state-of-the-art')
+    expect(normalizeWord("don't")).toBe("don't")
+  })
+
+  it('多词短语折叠内部连续空白', () => {
+    expect(normalizeWord('  look   forward   to  ')).toBe('look forward to')
+  })
+
+  it('全是标点时归一化为空串', () => {
+    expect(normalizeWord('...')).toBe('')
+    expect(normalizeWord(' “”— ‘ ’ ')).toBe('')
+  })
+})
+
+describe('vocabulary: 候选词判定', () => {
+  it('1~3 个西文单词且无句末标点时为合法候选', () => {
+    expect(isVocabCandidate('novel')).toBe(true)
+    expect(isVocabCandidate('bank account')).toBe(true)
+    expect(isVocabCandidate('in the air')).toBe(true)
+  })
+
+  it('带首尾标点的单词也是候选（因为归一化后非空）', () => {
+    expect(isVocabCandidate('“wonder”')).toBe(true)
+  })
+
+  it('整句或超长文本拒绝进入生词本', () => {
+    expect(isVocabCandidate('This is a complete sentence.')).toBe(false)
+    expect(isVocabCandidate('a'.repeat(25))).toBe(false)
+  })
+
+  it('纯标点或空白拒绝', () => {
+    expect(isVocabCandidate('')).toBe(false)
+    expect(isVocabCandidate('   ')).toBe(false)
+    expect(isVocabCandidate('???')).toBe(false)
+  })
+})
+
+describe('vocabulary: 记录组装与重复合并', () => {
+  const result = {
+    text: '开始；开端',
+    alt: '源',
+    context: '这是一个崭新的开端。',
+  }
+
+  it('组装首条记录：初次收藏 lookups 为 1，时间戳自洽', () => {
+    const rec = buildVocabRecord({
+      source: ' “Beginning” ',
+      bookId: 'b1',
+      charIndex: 120,
+      sentence: 'In the beginning was the Word.',
+      result,
+      now: 1000,
+    })
+    expect(rec.word).toBe('beginning')
+    expect(rec.bookId).toBe('b1')
+    expect(rec.charIndex).toBe(120)
+    expect(rec.excerpt).toBe('In the beginning was the Word.')
+    expect(rec.gloss).toBe('开始；开端')
+    expect(rec.alt).toBe('源')
+    expect(rec.context).toBe('这是一个崭新的开端。')
+    expect(rec.lookups).toBe(1)
+    expect(rec.createdAt).toBe(1000)
+    expect(rec.lastLookupAt).toBe(1000)
+  })
+
+  it('语境超过上限时截断并加上省略号', () => {
+    const longSentence = 'A'.repeat(CONTEXT_MAX_CHARS + 50)
+    const rec = buildVocabRecord({
+      source: 'word',
+      bookId: 'b1',
+      charIndex: 0,
+      sentence: longSentence,
+      result: { text: '词' },
+    })
+    expect(rec.excerpt.length).toBe(CONTEXT_MAX_CHARS)
+    expect(rec.excerpt.endsWith('…')).toBe(true)
+  })
+
+  it('重复收藏：lookups 累加，保留首次收藏时间，更新最新语境与时间', () => {
+    const first: VocabRecord = {
+      word: 'bank',
+      bookId: 'b1',
+      charIndex: 50,
+      excerpt: 'on the river bank',
+      gloss: '岸',
+      lookups: 1,
+      createdAt: 1000,
+      lastLookupAt: 1000,
+    }
+    const secondCandidate: VocabRecord = {
+      word: 'bank',
+      bookId: 'b2',
+      charIndex: 888,
+      excerpt: 'sat by the bank of a canal',
+      gloss: '河岸',
+      alt: '堤',
+      lookups: 1,
+      createdAt: 2000,
+      lastLookupAt: 2000,
+    }
+    const merged = mergeVocabOnRecollection(first, secondCandidate)
+    expect(merged.lookups).toBe(2)
+    expect(merged.createdAt).toBe(1000)
+    expect(merged.lastLookupAt).toBe(2000)
+    expect(merged.bookId).toBe('b2')
+    expect(merged.charIndex).toBe(888)
+    expect(merged.excerpt).toBe('sat by the bank of a canal')
+    expect(merged.gloss).toBe('河岸')
+  })
+})
+
+describe('vocabulary: 导出 Markdown 与 CSV', () => {
+  const records: VocabRecord[] = [
+    {
+      word: 'beginning',
+      bookId: 'b1',
+      charIndex: 10,
+      excerpt: 'It was only the beginning.',
+      gloss: '开始；开端',
+      alt: '早先',
+      context: '这仅仅是个开端。',
+      lookups: 2,
+      createdAt: 1000,
+      lastLookupAt: 2000,
+    },
+    {
+      word: 'quote, "test"',
+      bookId: 'b1',
+      charIndex: 20,
+      excerpt: 'He said:\n"Hello, world!"',
+      gloss: '带有逗号与"引号"的释义',
+      lookups: 1,
+      createdAt: 1500,
+      lastLookupAt: 1500,
+    },
+  ]
+
+  it('导出 Markdown 包含书名、词条、释义和例句', () => {
+    const md = vocabToMarkdown(records, '爱丽丝梦游仙境', new Date(1700000000000))
+    expect(md).toContain('# 《爱丽丝梦游仙境》生词本')
+    expect(md).toContain('共 2 个生词')
+    expect(md).toContain('## beginning')
+    expect(md).toContain('> 开始；开端')
+    expect(md).toContain('> 也作：早先')
+    expect(md).toContain('> 整句：这仅仅是个开端。')
+    expect(md).toContain('> 原句：It was only the beginning.')
+  })
+
+  it('导出 CSV 包含 UTF-8 BOM，且正确转义双引号和换行', () => {
+    const csv = vocabToCsv(records)
+    expect(csv.startsWith('\uFEFF')).toBe(true)
+    const lines = csv.split('\r\n')
+    expect(lines[0]).toBe('\uFEFFword,gloss,context')
+    // 第一行正常词
+    expect(lines[1]).toContain('"beginning"')
+    expect(lines[1]).toContain('"开始；开端"')
+    // 第二行含引号和换行，引号被加倍，换行被压成空格
+    expect(lines[2]).toContain('""test""')
+    expect(lines[2]).toContain('""引号""')
+    expect(lines[2]).not.toContain('\n')
+  })
+})
