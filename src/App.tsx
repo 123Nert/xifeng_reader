@@ -4,9 +4,10 @@
 import { useEffect, useState } from 'react'
 import LibraryPage from './pages/LibraryPage'
 import ReaderPage from './pages/ReaderPage'
+import StudyMaterialsPage from './pages/StudyMaterialsPage'
 import { applySettingsToDocument, loadSettings } from './core/settings'
 
-type View = { name: 'library' } | { name: 'reader'; bookId: string }
+type View = { name: 'library' } | { name: 'study' } | { name: 'reader'; bookId: string; charIndex?: number }
 
 export default function App() {
   const [view, setView] = useState<View>({ name: 'library' })
@@ -17,7 +18,8 @@ export default function App() {
   }, [])
 
   if (view.name === 'reader') {
-    return <ReaderPage bookId={view.bookId} onBack={() => setView({ name: 'library' })} />
+    return <ReaderPage bookId={view.bookId} initialOffset={view.charIndex} onBack={() => setView({ name: 'library' })} />
   }
-  return <LibraryPage onOpen={(bookId) => setView({ name: 'reader', bookId })} />
+  if (view.name === 'study') return <StudyMaterialsPage onBack={() => setView({ name: 'library' })} onOpenReader={(bookId, charIndex) => setView({ name: 'reader', bookId, charIndex })} />
+  return <LibraryPage onStudy={() => setView({ name: 'study' })} onOpen={(bookId) => setView({ name: 'reader', bookId })} />
 }

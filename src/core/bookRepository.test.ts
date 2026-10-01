@@ -364,6 +364,43 @@ describe('bookRepository: PDF 原件（V6.2）', () => {
 })
 
 // ---------- V6.6 生词本 ----------
+// Study-material tests
+describe('bookRepository global annotations', () => {
+  it('lists annotations from all books', async () => {
+    await repo.addBook(book('s1', '正文一'))
+    await repo.addBook(book('s2', '正文二'))
+    await repo.addHighlight('s1', 1, 2, 'first')
+    await repo.addHighlight('s2', 2, 3, 'second')
+    expect((await repo.listHighlightsAll()).map((item) => item.text).sort()).toEqual(['first', 'second'])
+    await repo.deleteBook('s1')
+    expect((await repo.listHighlightsAll()).map((item) => item.text)).toEqual(['second'])
+  })
+
+  it('deleting a book removes only that vocabulary source', async () => {
+    await repo.addBook(book('source-a', '正文一'))
+    await repo.addBook(book('source-b', '正文二'))
+    await repo.addVocabRecord({
+      word: 'bank', bookId: 'source-b', charIndex: 20, excerpt: 'new bank', gloss: '岸',
+      lookups: 2, createdAt: 100, lastLookupAt: 200,
+      sources: [
+        { bookId: 'source-a', charIndex: 10, excerpt: 'river bank', gloss: '河岸' },
+        { bookId: 'source-b', charIndex: 20, excerpt: 'new bank', gloss: '岸' },
+      ],
+    })
+    expect(await repo.listVocabByBook('source-a')).toHaveLength(1)
+    await repo.deleteBook('source-a')
+    expect(await repo.listVocabByBook('source-a')).toHaveLength(0)
+    expect(await repo.listVocabByBook('source-b')).toHaveLength(1)
+    expect(await repo.getVocabRecord('bank')).toMatchObject({ bookId: 'source-b', sources: [{ bookId: 'source-b' }] })
+  })
+
+  it('persists vocabulary review schedule', async () => {
+    await repo.addVocabRecord({ word: 'review', bookId: 's1', charIndex: 0, excerpt: 'read', gloss: '复习', lookups: 1, createdAt: 100, lastLookupAt: 100 })
+    const result = await repo.reviewVocab('review', true, 5000)
+    expect(result?.dueAt).toBe(5000 + 86400000)
+    expect((await repo.getVocabRecord('review'))?.reviewStep).toBe(1)
+  })
+})
 
 describe('bookRepository: 生词本（V6.6）', () => {
   const sampleVocab = (word: string, bookId: string, lastLookupAt = 1000) => ({

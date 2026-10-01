@@ -16,6 +16,11 @@ import { isWordLookup, type TranslationResult } from './translate'
 
 /** 一条生词记录（IndexedDB vocab store 的 value；主键是归一化后的词）。 */
 export interface VocabRecord {
+  sources?: VocabSource[]
+  reviewStep?: number
+  dueAt?: number
+  lastReviewedAt?: number
+
   /** 归一化后的词（小写、去标点壳）：主键，同词跨书唯一 */
   word: string
   /** 最近一次收藏时的书（跳回出处 + 书内过滤用） */
@@ -37,6 +42,66 @@ export interface VocabRecord {
   /** 最近一次收藏时刻 */
   lastLookupAt: number
 }
+
+export interface VocabSource {
+  bookId: string
+  charIndex: number
+  excerpt: string
+  gloss?: string
+  alt?: string
+  context?: string
+}
+
+const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30]
+const DAY_MS = 24 * 60 * 60 * 1000
+
+export function normalizeVocabRecord(record: VocabRecord): VocabRecord {
+  const sourceList = Array.isArray(record.sources) && record.sources.length > 0
+    ? record.sources
+    : [{
+        bookId: record.bookId,
+        charIndex: record.charIndex,
+        excerpt: record.excerpt,
+        gloss: record.gloss,
+        alt: record.alt,
+        context: record.context,
+      }]
+  const sources = sourceList.map((source) => ({
+    bookId: source.bookId,
+    charIndex: source.charIndex,
+    excerpt: source.excerpt ?? '',
+    ...(source.gloss ? { gloss: source.gloss } : {}),
+    ...(source.alt ? { alt: source.alt } : {}),
+    ...(source.context ? { context: source.context } : {}),
+  }))
+  return {
+    ...record,
+    sources,
+    reviewStep: Number.isInteger(record.reviewStep) ? Math.max(0, record.reviewStep!) : 0,
+  }
+}
+
+export function reviewVocabRecord(
+  record: VocabRecord,
+  remembered: boolean,
+  now = Date.now(),
+): VocabRecord {
+  const normalized = normalizeVocabRecord(record)
+  const step = normalized.reviewStep ?? 0
+  const nextStep = remembered ? Math.min(step + 1, REVIEW_INTERVAL_DAYS.length) : 0
+  const intervalIndex = remembered ? Math.min(step, REVIEW_INTERVAL_DAYS.length - 1) : 0
+  return {
+    ...normalized,
+    reviewStep: nextStep,
+    dueAt: now + REVIEW_INTERVAL_DAYS[intervalIndex] * DAY_MS,
+    lastReviewedAt: now,
+  }
+}
+
+export function isVocabDue(record: VocabRecord, now = Date.now()): boolean {
+  return !Number.isFinite(record.dueAt) || record.dueAt! <= now
+}
+
 
 /** 语境（整句）最长保留字符数：再长的句子截断展示也够回忆现场了。 */
 export const CONTEXT_MAX_CHARS = 200
@@ -80,17 +145,28 @@ export function buildVocabRecord(input: {
   now?: number
 }): VocabRecord {
   const now = input.now ?? Date.now()
+  const excerpt = input.sentence ? clip(input.sentence, CONTEXT_MAX_CHARS) : ''
+  const gloss = clip(input.result.text, GLOSS_MAX_CHARS)
+  const source: VocabSource = {
+    bookId: input.bookId,
+    charIndex: input.charIndex,
+    excerpt,
+    gloss,
+    ...(input.result.alt ? { alt: clip(input.result.alt, GLOSS_MAX_CHARS) } : {}),
+    ...(input.result.context ? { context: clip(input.result.context, GLOSS_MAX_CHARS) } : {}),
+  }
   return {
     word: normalizeWord(input.source),
     bookId: input.bookId,
     charIndex: input.charIndex,
-    excerpt: input.sentence ? clip(input.sentence, CONTEXT_MAX_CHARS) : '',
-    gloss: clip(input.result.text, GLOSS_MAX_CHARS),
+    excerpt,
+    gloss,
     ...(input.result.alt ? { alt: clip(input.result.alt, GLOSS_MAX_CHARS) } : {}),
     ...(input.result.context ? { context: clip(input.result.context, GLOSS_MAX_CHARS) } : {}),
     lookups: 1,
     createdAt: now,
     lastLookupAt: now,
+    sources: [source],
   }
 }
 
@@ -99,10 +175,24 @@ export function buildVocabRecord(input: {
  * 首次收藏时间保留 —— "这个词我攒下过"和"我当时读到哪"两个信息都不丢。
  */
 export function mergeVocabOnRecollection(existing: VocabRecord, next: VocabRecord): VocabRecord {
+  const previous = normalizeVocabRecord(existing)
+  const latest = normalizeVocabRecord(next)
+  const sources = [...(previous.sources ?? [])]
+  for (const source of latest.sources ?? []) {
+    const index = sources.findIndex(
+      (item) => item.bookId === source.bookId && item.charIndex === source.charIndex,
+    )
+    if (index >= 0) sources[index] = source
+    else sources.push(source)
+  }
   return {
-    ...next,
+    ...latest,
     lookups: (existing.lookups ?? 0) + 1,
     createdAt: existing.createdAt,
+    sources,
+    reviewStep: previous.reviewStep,
+    ...(previous.dueAt != null ? { dueAt: previous.dueAt } : {}),
+    ...(previous.lastReviewedAt != null ? { lastReviewedAt: previous.lastReviewedAt } : {}),
   }
 }
 

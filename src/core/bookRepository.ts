@@ -19,7 +19,7 @@ import {
   type HighlightRecord,
   type MarkStyle,
 } from './highlight'
-import type { VocabRecord } from './vocabulary'
+import { normalizeVocabRecord, reviewVocabRecord, type VocabRecord } from './vocabulary'
 
 export interface BookRecord {
   id: string
@@ -291,14 +291,14 @@ export async function listLibrary(): Promise<LibraryEntry[]> {
 
 export async function deleteBook(id: string): Promise<void> {
   const db = await getDB()
-  const tx = db.transaction(['books', 'progress', 'pdfPages', 'pdfFiles', 'vocab'], 'readwrite')
+  const tx = db.transaction(['books', 'progress', 'pdfPages', 'pdfFiles', 'vocab', 'highlights'], 'readwrite')
   await Promise.all([
     tx.objectStore('books').delete(id),
     tx.objectStore('progress').delete(id),
     // 原版页/原件一并清掉，避免删书后 IndexedDB 还残留长尾存储
     deletePdfPagesFromStore(id, tx.objectStore('pdfPages') as IDBPObjectStore<XifengDB, ['pdfPages'], 'pdfPages', 'readwrite'>),
     tx.objectStore('pdfFiles').delete(id),
-    // V6.6：书没了，这本书收的生词也不再跳转得回，一并清掉
+    deleteHighlightsFromStore(id, tx.objectStore('highlights')),
     deleteVocabFromStore(id, tx.objectStore('vocab')),
     tx.done,
   ])
@@ -382,8 +382,9 @@ export async function updateBookTocPattern(id: string, pattern: string): Promise
 /** 写入/覆盖一条生词（同词主键覆盖；重复收藏的 lookups 合并由调用方先算好）。 */
 export async function addVocabRecord(record: VocabRecord): Promise<VocabRecord> {
   const db = await getDB()
-  await db.put('vocab', record)
-  return record
+  const normalized = normalizeVocabRecord(record)
+  await db.put('vocab', normalized)
+  return normalized
 }
 
 /** 查某个词收过没有（浮卡打开时的"已收藏"态）。 */
@@ -395,15 +396,36 @@ export async function getVocabRecord(word: string): Promise<VocabRecord | undefi
 /** 某本书的生词，按最近收藏时间倒序（阅读菜单「生词」页签）。 */
 export async function listVocabByBook(bookId: string): Promise<VocabRecord[]> {
   const db = await getDB()
-  const list = await db.getAllFromIndex('vocab', 'by-book', bookId)
-  return list.sort((a, b) => b.lastLookupAt - a.lastLookupAt)
+  const list = (await db.getAll('vocab')).map(normalizeVocabRecord)
+  return list
+    .filter((record) => record.sources?.some((source) => source.bookId === bookId))
+    .sort((a, b) => b.lastLookupAt - a.lastLookupAt)
 }
 
 /** 全量生词，按最近收藏时间倒序（导出用）。 */
 export async function listVocabAll(): Promise<VocabRecord[]> {
   const db = await getDB()
-  const list = await db.getAll('vocab')
+  const list = (await db.getAll('vocab')).map(normalizeVocabRecord)
   return list.sort((a, b) => b.lastLookupAt - a.lastLookupAt)
+}
+
+export async function reviewVocab(
+  word: string,
+  remembered: boolean,
+  now = Date.now(),
+): Promise<VocabRecord | undefined> {
+  const db = await getDB()
+  const tx = db.transaction('vocab', 'readwrite')
+  const store = tx.objectStore('vocab')
+  const record = await store.get(word)
+  if (!record) {
+    await tx.done
+    return undefined
+  }
+  const reviewed = reviewVocabRecord(record, remembered, now)
+  await store.put(reviewed)
+  await tx.done
+  return reviewed
 }
 
 export async function deleteVocabRecord(word: string): Promise<void> {
@@ -423,8 +445,38 @@ async function deleteVocabFromStore(
   bookId: string,
   store: IDBPObjectStore<XifengDB, any, 'vocab', 'readwrite'>,
 ): Promise<void> {
+  const records = await store.getAll()
+  for (const record of records) {
+    const normalized = normalizeVocabRecord(record)
+    const existingSources = normalized.sources ?? []
+    const sources = existingSources.filter((source) => source.bookId !== bookId)
+    if (sources.length === existingSources.length) continue
+    if (sources.length === 0) {
+      await store.delete(record.word)
+      continue
+    }
+    const next: VocabRecord = { ...normalized, sources }
+    if (normalized.bookId === bookId) {
+      const latest = sources[sources.length - 1]
+      next.bookId = latest.bookId
+      next.charIndex = latest.charIndex
+      next.excerpt = latest.excerpt
+      next.gloss = latest.gloss ?? normalized.gloss
+      if (latest.alt) next.alt = latest.alt
+      else delete next.alt
+      if (latest.context) next.context = latest.context
+      else delete next.context
+    }
+    await store.put(next)
+  }
+}
+
+async function deleteHighlightsFromStore(
+  bookId: string,
+  store: IDBPObjectStore<XifengDB, any, 'highlights', 'readwrite'>,
+): Promise<void> {
   const keys = await store.index('by-book').getAllKeys(IDBKeyRange.only(bookId))
-  for (const k of keys) await store.delete(k)
+  for (const key of keys) await store.delete(key)
 }
 
 // ---------- 书签（V1.2） ----------
@@ -529,6 +581,12 @@ export async function listHighlights(bookId: string): Promise<HighlightRecord[]>
   const db = await getDB()
   const list = await db.getAllFromIndex('highlights', 'by-book', bookId)
   return list.map((r) => normalizeHighlight(r)).sort((a, b) => a.start - b.start)
+}
+
+export async function listHighlightsAll(): Promise<HighlightRecord[]> {
+  const db = await getDB()
+  const list = await db.getAll('highlights')
+  return list.map(normalizeHighlight).sort((a, b) => b.createdAt - a.createdAt)
 }
 
 export async function deleteHighlight(id: string): Promise<void> {

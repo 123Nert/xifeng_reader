@@ -65,7 +65,7 @@ function formatLastRead(ts: number | null, now = Date.now()): string {
   return `${d.getFullYear()}-${m < 10 ? '0' + m : m}-${day < 10 ? '0' + day : day}`
 }
 
-export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => void }) {
+export default function LibraryPage({ onOpen, onStudy }: { onOpen: (bookId: string) => void; onStudy: () => void }) {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null)
   const [importing, setImporting] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -351,6 +351,7 @@ export default function LibraryPage({ onOpen }: { onOpen: (bookId: string) => vo
           <p className="sub">本地阅读器 · 支持 TXT / EPUB / MD / HTML · 导入即读，下次接着读</p>
         </div>
         <div className="import-options">
+          <button className="btn chip" onClick={onStudy}>学习资料</button>
           <label className="import-check">
             <input
               type="checkbox"

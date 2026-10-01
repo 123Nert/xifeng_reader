@@ -1710,6 +1710,157 @@ mark.hl.flash {
   animation: hl-flash 0.8s ease 2;
 }
 
+.study-page {
+  min-height: 100vh;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+  color: var(--text);
+}
+
+.study-header,
+.study-card-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.study-header {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.study-header h1,
+.study-word {
+  margin: 0;
+}
+
+.study-export-actions,
+.study-review-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.study-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.study-toolbar .search-input {
+  flex: 1 1 240px;
+  min-width: 180px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.study-due-toggle,
+.study-count,
+.study-card-top {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.study-due-toggle {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.study-list {
+  display: grid;
+  gap: 12px;
+}
+
+.study-card {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.study-kind {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.study-quote {
+  margin: 13px 0 7px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.study-note,
+.study-word span {
+  color: var(--muted);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.study-word {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 14px;
+  font-size: 20px;
+}
+
+.study-word span {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.study-review-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.study-header .sub {
+  margin: 5px 0 0;
+}
+
+@media (max-width: 640px) {
+  .study-page {
+    padding: 18px 14px 32px;
+  }
+
+  .study-header {
+    align-items: flex-start;
+  }
+
+  .study-export-actions {
+    width: 100%;
+  }
+
+  .study-export-actions .btn {
+    flex: 1;
+  }
+
+  .study-card-top {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .study-card-top .flex-spacer {
+    display: none;
+  }
+
+  .study-card-top > .btn {
+    margin-left: auto;
+  }
+}
+
 /* ========== Toast ========== */
 
 .toast {

@@ -168,7 +168,7 @@ function createDomMeasurer(
   }
 }
 
-export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack: () => void }) {
+export default function ReaderPage({ bookId, onBack, initialOffset }: { bookId: string; onBack: () => void; initialOffset?: number }) {
   const [title, setTitle] = useState('')
   const [author, setAuthor] = useState<string | null>(null)
   const [totalChars, setTotalChars] = useState(0)
@@ -221,6 +221,7 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
   const [editState, setEditState] = useState<{ ids: string[]; index: number } | null>(null)
   /** 跳转定位后闪烁高亮的批注 id */
   const [flashId, setFlashId] = useState<string | null>(null)
+  const appliedInitialOffsetRef = useRef<string | null>(null)
   /** 滚动模式（V2.1）：锚点页之后已渲染的页数、视口顶部所在页起点 */
   const [extraCount, setExtraCount] = useState(0)
   const [viewStart, setViewStart] = useState(0)
@@ -1204,6 +1205,14 @@ export default function ReaderPage({ bookId, onBack }: { bookId: string; onBack:
       resetScrollWindow,
     ],
   )
+
+  useEffect(() => {
+    if (!ready || initialOffset == null) return
+    const targetKey = `${bookId}:${initialOffset}`
+    if (appliedInitialOffsetRef.current === targetKey) return
+    appliedInitialOffsetRef.current = targetKey
+    jumpToOffset(initialOffset)
+  }, [bookId, initialOffset, jumpToOffset, ready])
 
   const openMenu = useCallback((tab: MenuTab) => {
     closeTranslateRef.current() // V6.5：菜单要占屏，避免与译文卡叠层

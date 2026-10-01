@@ -8,8 +8,11 @@ import {
   buildVocabRecord,
   CONTEXT_MAX_CHARS,
   isVocabCandidate,
+  isVocabDue,
   mergeVocabOnRecollection,
+  normalizeVocabRecord,
   normalizeWord,
+  reviewVocabRecord,
   vocabToCsv,
   vocabToMarkdown,
   type VocabRecord,
@@ -36,6 +39,56 @@ describe('vocabulary: 单词归一化', () => {
   it('全是标点时归一化为空串', () => {
     expect(normalizeWord('...')).toBe('')
     expect(normalizeWord(' “”— ‘ ’ ')).toBe('')
+  })
+})
+
+describe('vocabulary: 多出处兼容与复习排期', () => {
+  const legacy: VocabRecord = {
+    word: 'bank',
+    bookId: 'b1',
+    charIndex: 10,
+    excerpt: 'river bank',
+    gloss: '河岸',
+    lookups: 1,
+    createdAt: 100,
+    lastLookupAt: 100,
+  }
+
+  it('旧记录归一化为单一出处并立即可复习', () => {
+    const normalized = normalizeVocabRecord(legacy)
+    expect(normalized.sources).toEqual([{ bookId: 'b1', charIndex: 10, excerpt: 'river bank', gloss: '河岸' }])
+    expect(isVocabDue(normalized, 100)).toBe(true)
+  })
+
+  it('重收相同单词保留跨书出处，同一位置只留最新语境', () => {
+    const first = mergeVocabOnRecollection(legacy, { ...legacy, createdAt: 200, lastLookupAt: 200 })
+    const second = mergeVocabOnRecollection(first, { ...legacy, bookId: 'b2', charIndex: 50, excerpt: 'canal bank', createdAt: 300, lastLookupAt: 300 })
+    const third = mergeVocabOnRecollection(second, { ...legacy, bookId: 'b1', charIndex: 10, excerpt: 'the bank', createdAt: 400, lastLookupAt: 400 })
+    expect(third.sources).toHaveLength(2)
+    expect(third.sources?.find((source) => source.bookId === 'b1')?.excerpt).toBe('the bank')
+    expect(third.sources?.some((source) => source.bookId === 'b2')).toBe(true)
+  })
+
+  it('记住后按 1、3、7、14、30 天递进并封顶', () => {
+    let record = normalizeVocabRecord(legacy)
+    const intervals = [1, 3, 7, 14, 30]
+    let now = 1000
+    for (const days of intervals) {
+      record = reviewVocabRecord(record, true, now)
+      expect(record.dueAt).toBe(now + days * 86400000)
+      now += 100
+    }
+    record = reviewVocabRecord(record, true, now)
+    expect(record.dueAt).toBe(now + 30 * 86400000)
+  })
+
+  it('再复习重置进度并安排次日到期', () => {
+    const record = reviewVocabRecord({ ...legacy, reviewStep: 3 }, false, 5000)
+    expect(record.reviewStep).toBe(0)
+    expect(record.dueAt).toBe(5000 + 86400000)
+    expect(record.lastReviewedAt).toBe(5000)
+    expect(isVocabDue(record, record.dueAt! - 1)).toBe(false)
+    expect(isVocabDue(record, record.dueAt!)).toBe(true)
   })
 })
 
