@@ -1,7 +1,7 @@
 # xifeng 阅读
 
 [![version](https://img.shields.io/github/v/tag/123Nert/xifeng_reader?label=version)](https://github.com/123Nert/xifeng_reader/tags)
-[![tests](https://img.shields.io/badge/tests-289%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-299%20passing-brightgreen)](src)
 [![PWA](https://img.shields.io/badge/PWA-ready-blueviolet)](vite.config.ts)
 
 本地电子书阅读器（Web 应用）。核心闭环：**导入一本书 → 舒服地读完 → 下次打开接着读**。
@@ -22,10 +22,21 @@
 - 划词翻译（V6.4）：选中英文即出中文（单词给义项 + 所在整句对照），可一键存为想法；目标语言可设（见 [V6.4 方案](docs/V6.4-划词翻译方案.md)）
 - 译文浮卡（V6.5）：**鼠标移到别处停下就自动收起**，不用再点 ✕；不动鼠标读译文时不会消失（见 [V6.5 方案](docs/V6.5-翻译浮卡自动消失方案.md)）
 - 生词本（V6.6）：查词浮卡一键「★ 生词」收藏，自动附带所在整句语境与出处；阅读菜单独立「生词」页签支持回看出处、移出生词、导出 Markdown / Anki CSV（见 [V6.6 方案](docs/V6.6-生词本方案.md)）
+- 学习资料中心（V6.7）：按书籍 / 章节整理批注、笔记和生词，支持全文搜索、筛选、Markdown / CSV 导出、回到原文及本地间隔复习
 - 进度自动保存，重新打开精确续读；进度条拖动跳转任意位置
 - PWA 可安装，离线可读；备份导出 / 导入（全量 JSON，含 PDF 原件与生词本）
 
 ## 当前版本
+
+**V6.7 学习资料中心与间隔复习** ✅
+
+- **统一整理**：书库新增学习资料中心，汇集所有书籍的划线批注、笔记与生词，按书籍、章节和资料类型筛选。
+- **搜索与导出**：可搜索原文、笔记、生词、释义和语境；当前筛选结果支持导出 Markdown 或 CSV。
+- **回到原文**：每条资料保留书籍字符偏移，可从资料中心直接跳回阅读位置。
+- **本地间隔复习**：生词卡按 1 / 3 / 7 / 14 / 30 天推进；遗忘时安排次日重试，复习状态保存在 IndexedDB。
+- **跨书出处**：同一生词仍为一张卡，保留各书中的出现位置与语境。
+
+完整实现已加入书库和阅读器，无需账号或服务端。
 
 **V6.6 生词本（收集·回看·导出）** ✅
 
@@ -88,7 +99,8 @@
 
 | 版本 | 主题 | 标记 |
 | --- | --- | --- |
-| v6.6.0 | 生词本（查词收集 + 整句语境 + 回看与导出） | ✅ 当前 |
+| v6.7.0 | 学习资料中心（跨书整理 + 搜索导出 + 间隔复习） | ✅ 当前 |
+| v6.6.0 | 生词本（查词收集 + 整句语境 + 回看与导出） | ✅ |
 | v6.5.0 | 译文浮卡自动收起（移开即消失） | ✅ |
 | v6.4.0 | 划词翻译（英文→中文，含单词语境） | ✅ |
 | v6.3.0 | 书架封面（每本书的第一页） | ✅ |
@@ -110,7 +122,7 @@
 ```bash
 npm install
 npm run dev        # 开发（http://localhost:5173）
-npm run test       # Vitest 单元测试（271 例）
+npm run test       # Vitest 单元测试（299 例）
 npm run build      # 产出纯静态文件到 dist/
 npm run preview    # 本地预览构建产物
 ```
@@ -125,9 +137,10 @@ npm run preview    # 本地预览构建产物
 
 ```
 src/
-├─ main.tsx / App.tsx        # 入口；书库 / 阅读两视图切换；PWA 注册
+├─ main.tsx / App.tsx        # 入口；书库 / 学习资料 / 阅读视图切换；PWA 注册
 ├─ pages/
 │  ├─ LibraryPage.tsx        # 书库：导入、列表、管理、备份、统计
+│  ├─ StudyMaterialsPage.tsx  # 学习资料：跨书筛选、搜索、导出与间隔复习
 │  ├─ ReaderPage.tsx         # 阅读页：分页/滚动渲染、翻页、划线、TTS
 │  └─ ReaderMenu.tsx         # 阅读菜单：目录/书签/笔记/搜索/设置
 ├─ core/                     # 纯逻辑层，框架无关、可单测
@@ -138,7 +151,8 @@ src/
 │  ├─ toc.ts                 # 章节切分（内置 + 自定义正则）
 │  ├─ search.ts              # 全文搜索
 │  ├─ purify.ts              # 导入净化（推广行清理）
-│  ├─ bookRepository.ts      # IndexedDB 读写（books/progress/bookmarks/stats/highlights/pdfFiles）
+│  ├─ bookRepository.ts      # IndexedDB 读写（含批注、生词及复习状态）
+│  ├─ studyMaterials.ts      # 学习资料聚合、筛选与 Markdown / CSV 导出
 │  ├─ cover.ts               # 书架封面：正文摘录/折行 + canvas 绘制
   ├─ bookCovers.ts          # 封面生成编排（PDF 首页 / EPUB 封面 / 文本首段）
   ├─ pdfNav.ts              # PDF 页码 ↔ 字符偏移换算
@@ -157,7 +171,7 @@ src/
 
 - [docs/产品设计文档.md](docs/产品设计文档.md) — 产品愿景、用户、闭环、非目标
 - [docs/技术方案.md](docs/技术方案.md) — core 纯逻辑层 + PageMap 字符偏移坐标系 + CSS 变量主题
-- [docs/功能迭代计划.md](docs/功能迭代计划.md) — V1.x → V6 的演进路线与验收清单
+- [docs/功能迭代计划.md](docs/功能迭代计划.md) — V1.x → V6.7 的演进路线与验收清单
 - [docs/V4.0-批注与笔记方案.md](docs/V4.0-批注与笔记方案.md) — 6 色 × 4 样式 + 容错锚定 + Obsidian 友好导出
 - [docs/V5.0-多格式导入方案.md](docs/V5.0-多格式导入方案.md) — EPUB/MD/HTML 设计选型与"PDF 不做"的原始论证
 - [docs/V6.0-PDF支持方案.md](docs/V6.0-PDF支持方案.md) — 上述翻案：按需加载 / 扫描版识别 / 加密提示
