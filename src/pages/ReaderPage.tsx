@@ -83,7 +83,7 @@ import {
 import ReaderMenu, { type MenuTab } from './ReaderMenu'
 import { EditCard, SelToolbar, type SelInfo } from './Annotator'
 import { TranslateCard, type TranslateState } from './Translator'
-import { isWordLookup, TranslateError, translateText } from '../core/translate'
+import { isWordLookup, looksChinese, TranslateError, translateText } from '../core/translate'
 import {
   HOVER_POLL_MS,
   isSignificantMove,
@@ -229,6 +229,8 @@ export default function ReaderPage({ bookId, onBack, initialOffset }: { bookId: 
   const [scanBox, setScanBox] = useState<{ width: number; height: number } | null>(null)
 
   const textRef = useRef('')
+  /** V6.8：本书的朗读语言（EPUB 用元信息，其余按正文抽样判断），TTS 每句 utterance 都读它 */
+  const bookLangRef = useRef('zh-CN')
   const pagemapRef = useRef<PageMap | null>(null)
   const measurerRef = useRef<(Measurer & { refresh(): void }) | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -308,6 +310,11 @@ export default function ReaderPage({ bookId, onBack, initialOffset }: { bookId: 
       if (!viewport || !probe) return
 
       textRef.current = book.content
+      // V6.8：确定本书的朗读语言 —— EPUB 优先用元信息，其余按正文前 2000 字抽样判断
+      const langTag = (book.language ?? '').toLowerCase()
+      bookLangRef.current = langTag
+        ? langTag.startsWith('zh') ? 'zh-CN' : 'en-US'
+        : looksChinese(book.content.slice(0, 2000)) ? 'zh-CN' : 'en-US'
       // V6.2：PDF —— 有原件就按"原版页面"打开（版式/图片/表格都在），
       // 文字层（若有）用于搜索 / 划线 / 朗读 / 分页续读。
       if (book.format === 'pdf') {
@@ -1160,7 +1167,9 @@ export default function ReaderPage({ bookId, onBack, initialOffset }: { bookId: 
         return
       }
       const u = new SpeechSynthesisUtterance(sentences[idx++])
-      u.lang = 'zh-CN'
+      // V6.8：语言跟随本书（英文书用英文语音引擎），语速用全局设置档位
+      u.lang = bookLangRef.current
+      u.rate = settingsRef.current.ttsRate
       u.onend = () => speakNext()
       u.onerror = () => setSpeaking(false)
       synth.speak(u)
@@ -1992,6 +2001,13 @@ export default function ReaderPage({ bookId, onBack, initialOffset }: { bookId: 
         onTranslateTarget={(t) => {
           // 翻译语言只影响下一次划词，不涉排版 → 轻量更新（不重排、阅读位置不动）
           const next = { ...settings, translateTarget: t }
+          settingsRef.current = next
+          setSettings(next)
+          saveSettings(next)
+        }}
+        onTtsRate={(r) => {
+          // 朗读语速同样只影响下一次朗读 → 轻量更新
+          const next = { ...settings, ttsRate: r }
           settingsRef.current = next
           setSettings(next)
           saveSettings(next)

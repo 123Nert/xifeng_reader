@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   clampFontSize,
   clampScanZoom,
+  clampTtsRate,
   clampTranslateTarget,
   loadSettings,
   nextLineHeight,
@@ -48,6 +49,7 @@ const DEFAULTS: ReaderSettings = {
   pageMode: 'paged',
   scanZoom: 1,
   translateTarget: 'auto',
+  ttsRate: 1,
 }
 
 describe('settings: 读写', () => {
@@ -70,6 +72,7 @@ describe('settings: 读写', () => {
       pageMode: 'scroll',
       scanZoom: 2,
       translateTarget: 'zh-CN',
+      ttsRate: 1.5,
     }
     const storage = makeStorage()
     saveSettings(s, storage)
@@ -180,5 +183,29 @@ describe('settings: 取值域', () => {
       'xifeng.settings': '{"fontSize":20,"lineHeight":1.75,"theme":"sepia"}',
     })
     expect(loadSettings(storage).scanZoom).toBe(1)
+  })
+})
+
+describe('settings: TTS 朗读语速（V6.8）', () => {
+  it('clampTtsRate 只接受合法档位，其余回退 1×', () => {
+    expect(clampTtsRate(0.75)).toBe(0.75)
+    expect(clampTtsRate(2)).toBe(2)
+    expect(clampTtsRate(1.3)).toBe(1)
+    expect(clampTtsRate('fast')).toBe(1)
+    expect(clampTtsRate(undefined)).toBe(1)
+  })
+
+  it('旧版本数据（缺少 ttsRate）回退默认值 1×', () => {
+    const storage = makeStorage({
+      'xifeng.settings': '{"fontSize":20,"lineHeight":1.75,"theme":"sepia"}',
+    })
+    expect(loadSettings(storage).ttsRate).toBe(1)
+  })
+
+  it('合法 ttsRate 存取往返', () => {
+    const storage = makeStorage()
+    const settings = loadSettings(storage)
+    saveSettings({ ...settings, ttsRate: 1.5 }, storage)
+    expect(loadSettings(storage).ttsRate).toBe(1.5)
   })
 })

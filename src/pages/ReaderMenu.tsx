@@ -22,11 +22,14 @@ import {
   PARA_SPACING_STEPS,
   THEME_LABELS,
   THEME_NAMES,
+  TTS_RATE_LABELS,
+  TTS_RATE_STEPS,
   type FontFamilyName,
   type PageModeName,
   type ReaderSettings,
   type TranslateTarget,
   type ThemeName,
+  type TtsRate,
 } from '../core/settings'
 
 export type MenuTab = 'toc' | 'marks' | 'notes' | 'vocab' | 'search' | 'settings'
@@ -77,6 +80,8 @@ interface Props {
   onPageMode: (mode: PageModeName) => void
   /** V6.4：划词翻译的目标语言 */
   onTranslateTarget: (target: TranslateTarget) => void
+  /** V6.8：TTS 朗读语速档位 */
+  onTtsRate: (rate: TtsRate) => void
 }
 
 const TABS: Array<{ key: MenuTab; label: string }> = [
@@ -464,6 +469,20 @@ function SettingsPane(props: Props) {
               title={TRANSLATE_TARGET_LABELS[t]}
             >
               {t === 'auto' ? '自动' : t === 'zh-CN' ? '译为中文' : '译为英文'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-label">朗读语速</span>
+        <div className="set-value">
+          {TTS_RATE_STEPS.map((r) => (
+            <button
+              key={r}
+              className={`btn chip${settings.ttsRate === r ? ' active' : ''}`}
+              onClick={() => props.onTtsRate(r)}
+            >
+              {TTS_RATE_LABELS[r]}
             </button>
           ))}
         </div>

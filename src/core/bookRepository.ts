@@ -66,10 +66,12 @@ export interface BookmarkRecord {
   createdAt: number
 }
 
-/** V2.0 每日阅读统计（分钟），keyPath 为日期字符串。 */
+/** V2.0 每日统计（分钟），keyPath 为日期字符串；V6.8 增加可选复习次数字段。 */
 export interface DayStatRecord {
   day: string
   minutes: number
+  /** V6.8：当天完成的生词复习次数（连续复习天数统计用；旧记录无此字段视作 0） */
+  reviews?: number
 }
 
 // V4.0：批注模型（颜色/样式/锚定）见 core/highlight.ts，此处再导出便于调用方单点引入
@@ -425,7 +427,29 @@ export async function reviewVocab(
   const reviewed = reviewVocabRecord(record, remembered, now)
   await store.put(reviewed)
   await tx.done
+  // V6.8：复习活动计入当日统计（连续复习天数用）。失败不影响复习本身。
+  try {
+    await recordReviewActivity(new Date(now))
+  } catch {
+    // 统计写入失败可容忍
+  }
   return reviewed
+}
+
+/** 当日复习次数 +1（连续复习天数的数据源）。 */
+export async function recordReviewActivity(now = new Date()): Promise<void> {
+  const db = await getDB()
+  const day = todayKey(now)
+  const record = (await db.get('stats', day)) ?? { day, minutes: 0 }
+  record.reviews = (record.reviews ?? 0) + 1
+  await db.put('stats', record)
+}
+
+/** 有复习活动的日期串列表（YYYY-MM-DD），连续复习天数统计用。 */
+export async function listReviewDays(): Promise<string[]> {
+  const db = await getDB()
+  const all = await db.getAll('stats')
+  return all.filter((r) => (r.reviews ?? 0) > 0).map((r) => r.day)
 }
 
 export async function deleteVocabRecord(word: string): Promise<void> {

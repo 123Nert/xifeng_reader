@@ -4,9 +4,9 @@
  * 划词翻译（V6.4）查完就丢；生词本把"查过的词"攒下来：
  * 词 + 释义 + 所在整句语境 + 出处（哪本书哪个字符偏移），可回看、可导出。
  *
- * 对标 KOReader vocabbuilder / Kindle Vocabulary Builder，但本期只做
- * "收 + 管 + 导出"（见 docs/V6.6-生词本方案.md §3.6）：
- * 间隔复习（SRS）待 V6.7，全局跨书面板待产品验证后立项。
+ * 对标 KOReader vocabbuilder / Kindle Vocabulary Builder。V6.8 起复习排期
+ * 升级为艾宾浩斯遗忘曲线周期（[1,2,4,7,15,30] 天，遗忘回退 2 级不归零，
+ * 毕业进长期维护），留存率仅作展示级估算 —— 见 docs/V6.8-科学记忆与复习方案.md。
  *
  * 本文件全部纯函数：归一化、候选判定、记录组装、重复合并、导出文本。
  * IndexedDB 读写在 bookRepository.ts（vocab store，DB v7）。
@@ -52,7 +52,18 @@ export interface VocabSource {
   context?: string
 }
 
-const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30]
+/**
+ * 艾宾浩斯遗忘曲线的复习周期（V6.8，日粒度）。
+ * 经典节点 5min/30min/12h 在阅读器场景不实用，取其日粒度骨架：
+ * 1 / 2 / 4 / 7 / 15 / 30 天，复习满 6 级 = 走完全部周期 → 毕业（长期记忆），
+ * 此后按 MAINTENANCE_INTERVAL_DAYS 低频维护。
+ */
+export const EBBINGHAUS_INTERVAL_DAYS = [1, 2, 4, 7, 15, 30]
+/** 毕业后的维护间隔（天）：不再进"待复习"主循环，只是极低频地露面。 */
+export const MAINTENANCE_INTERVAL_DAYS = 90
+/** 遗忘时回退的级数：留存是指数衰减不是清零，退 2 级 = 从最近的稳固节点重爬。 */
+export const FORGET_STEP_BACK = 2
+
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export function normalizeVocabRecord(record: VocabRecord): VocabRecord {
@@ -81,6 +92,11 @@ export function normalizeVocabRecord(record: VocabRecord): VocabRecord {
   }
 }
 
+/** 是否已毕业（走完艾宾浩斯全部周期，进入长期记忆维护状态）。 */
+export function isVocabMastered(record: VocabRecord): boolean {
+  return (normalizeVocabRecord(record).reviewStep ?? 0) >= EBBINGHAUS_INTERVAL_DAYS.length
+}
+
 export function reviewVocabRecord(
   record: VocabRecord,
   remembered: boolean,
@@ -88,17 +104,56 @@ export function reviewVocabRecord(
 ): VocabRecord {
   const normalized = normalizeVocabRecord(record)
   const step = normalized.reviewStep ?? 0
-  const nextStep = remembered ? Math.min(step + 1, REVIEW_INTERVAL_DAYS.length) : 0
-  const intervalIndex = remembered ? Math.min(step, REVIEW_INTERVAL_DAYS.length - 1) : 0
+  if (remembered) {
+    // 已毕业：只在维护间隔上低频露面
+    if (step >= EBBINGHAUS_INTERVAL_DAYS.length) {
+      return {
+        ...normalized,
+        reviewStep: step,
+        dueAt: now + MAINTENANCE_INTERVAL_DAYS * DAY_MS,
+        lastReviewedAt: now,
+      }
+    }
+    // 在第 k 级记住 → 经历 interval[k] 天的周期，然后升到第 k+1 级。
+    // 第 6 次记住（k=5）经历完 30 天周期才真正毕业。
+    const intervalDays = EBBINGHAUS_INTERVAL_DAYS[Math.min(step, EBBINGHAUS_INTERVAL_DAYS.length - 1)]
+    return {
+      ...normalized,
+      reviewStep: step + 1,
+      dueAt: now + intervalDays * DAY_MS,
+      lastReviewedAt: now,
+    }
+  }
+  // 忘了：回退 2 级（不归零，艾宾浩斯留存衰减 ≠ 记忆清零），明天重新见面
+  const backStep = Math.max(step - FORGET_STEP_BACK, 0)
   return {
     ...normalized,
-    reviewStep: nextStep,
-    dueAt: now + REVIEW_INTERVAL_DAYS[intervalIndex] * DAY_MS,
+    reviewStep: backStep,
+    dueAt: now + DAY_MS,
     lastReviewedAt: now,
   }
 }
 
+/**
+ * 艾宾浩斯留存率的展示级估算（V6.8）：R = e^(-t / S)。
+ * t = 距上次复习的天数；S = 当前级别的间隔天数（新词 S=1，毕业词 S=90）。
+ * 只做展示（"这个词条大概还记得几成"），不是调度依据。
+ */
+export function retentionEstimate(record: VocabRecord, now = Date.now()): number {
+  const normalized = normalizeVocabRecord(record)
+  const step = normalized.reviewStep ?? 0
+  const mastered = step >= EBBINGHAUS_INTERVAL_DAYS.length
+  const stabilityDays = mastered
+    ? MAINTENANCE_INTERVAL_DAYS
+    : EBBINGHAUS_INTERVAL_DAYS[Math.min(step, EBBINGHAUS_INTERVAL_DAYS.length - 1)]
+  const anchor = normalized.lastReviewedAt ?? normalized.createdAt ?? now
+  const elapsedDays = Math.max(0, (now - anchor) / DAY_MS)
+  const retention = Math.exp(-elapsedDays / stabilityDays)
+  return Math.round(Math.min(1, Math.max(0, retention)) * 100)
+}
+
 export function isVocabDue(record: VocabRecord, now = Date.now()): boolean {
+  if (isVocabMastered(record)) return false
   return !Number.isFinite(record.dueAt) || record.dueAt! <= now
 }
 

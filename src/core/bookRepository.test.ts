@@ -492,3 +492,35 @@ describe('bookRepository: 生词本（V6.6）', () => {
     expect(reportOld.vocab).toBe(0)
   })
 })
+
+describe('bookRepository: 复习活动统计（V6.8）', () => {
+  const vocabOf = (word: string, bookId: string) => ({
+    word, bookId, charIndex: 0, excerpt: 'an echo', gloss: '回声',
+    lookups: 1, createdAt: 1000, lastLookupAt: 1000,
+  })
+
+  it('reviewVocab 记录当日复习活动，listReviewDays 返回活跃日期', async () => {
+    await repo.addBook(book('rv', '正文'))
+    await repo.addVocabRecord(vocabOf('echo', 'rv'))
+
+    await repo.reviewVocab('echo', true)
+    expect(await repo.listReviewDays()).toHaveLength(1)
+  })
+
+  it('同一记录上复习活动累加（reviews 计数），活跃日仍是同一天', async () => {
+    await repo.addBook(book('rv2', '正文'))
+    await repo.addVocabRecord(vocabOf('echo2', 'rv2'))
+
+    await repo.reviewVocab('echo2', true)
+    await repo.recordReviewActivity()
+    await repo.recordReviewActivity()
+
+    expect(await repo.listReviewDays()).toHaveLength(1)
+  })
+
+  it('从未复习过时没有活跃日期', async () => {
+    await repo.addBook(book('rv3', '正文'))
+    await repo.addVocabRecord(vocabOf('echo3', 'rv3'))
+    expect(await repo.listReviewDays()).toHaveLength(0)
+  })
+})

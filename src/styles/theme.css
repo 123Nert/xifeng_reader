@@ -1751,6 +1751,39 @@ mark.hl.flash {
   margin-bottom: 18px;
 }
 
+/* V6.8：复习统计条（今日到期 / 学习中 / 已掌握 / 连续天数） */
+.study-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.study-summary strong {
+  color: var(--accent);
+  font-size: 15px;
+  margin: 0 2px;
+}
+
+/* V6.8：生词卡记忆强度 + 发音按钮 */
+.study-strength {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vocab-speak {
+  margin: 0 8px;
+  padding: 1px 8px !important;
+}
+
 .study-toolbar .search-input {
   flex: 1 1 240px;
   min-width: 180px;

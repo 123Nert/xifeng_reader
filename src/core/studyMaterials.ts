@@ -1,6 +1,6 @@
 import { chapterIndexOf, type HighlightRecord } from './highlight'
 import { buildToc } from './toc'
-import { normalizeVocabRecord, type VocabRecord } from './vocabulary'
+import { isVocabDue, isVocabMastered, normalizeVocabRecord, type VocabRecord } from './vocabulary'
 
 export type StudyMaterialType = 'highlight' | 'vocab'
 
@@ -174,4 +174,67 @@ export function studyMaterialsToCsv(items: StudyMaterial[]): string {
     item.word, item.gloss, item.context, item.color, item.style, item.dueAt,
   ].map(csvCell).join(','))
   return `\uFEFF${[header, ...rows].join('\r\n')}`
+}
+
+// ---------- 复习统计（V6.8） ----------
+
+export interface ReviewSummary {
+  /** 今日到期待复习的生词数（跨书全局，不含已毕业） */
+  dueCount: number
+  /** 已毕业（走完艾宾浩斯周期）的生词数 */
+  masteredCount: number
+  /** 学习中（有复习进度但未毕业）的生词数 */
+  learningCount: number
+  /** 连续复习天数：从今天（今天没复习则从昨天）往回连续有复习活动的天数 */
+  streakDays: number
+}
+
+function dayKey(now: Date): string {
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${m}-${d}`
+}
+
+/**
+ * 连续复习天数：activeDays 是有复习活动的日期串（YYYY-M-D 统一为补零格式由仓储层保证）。
+ * 今天没复习不打断连续（昨晚复习的人今天白天打开 App 仍是连续中）；
+ * 从"今天或昨天"开始往回数，遇到断档即停。
+ */
+export function computeStreak(activeDays: string[], now = new Date()): number {
+  const days = new Set(activeDays)
+  const cursor = new Date(now)
+  if (!days.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1)
+  let streak = 0
+  while (days.has(dayKey(cursor))) {
+    streak++
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  return streak
+}
+
+/** 复习统计汇总（学习资料中心统计条）：到期 / 已掌握 / 学习中 / 连续天数。 */
+export function summarizeReview(
+  vocabRecords: VocabRecord[],
+  activeDays: string[],
+  now = new Date(),
+): ReviewSummary {
+  let dueCount = 0
+  let masteredCount = 0
+  let learningCount = 0
+  for (const raw of vocabRecords) {
+    const record = normalizeVocabRecord(raw)
+    if (isVocabMastered(record)) {
+      masteredCount++
+      continue
+    }
+    // 复习进度的口径：开始过复习（有 dueAt）或已到期待首次复习都算"学习中"
+    if (record.dueAt != null || isVocabDue(record, now.getTime())) learningCount++
+    if (isVocabDue(record, now.getTime())) dueCount++
+  }
+  return {
+    dueCount,
+    masteredCount,
+    learningCount,
+    streakDays: computeStreak(activeDays, now),
+  }
 }

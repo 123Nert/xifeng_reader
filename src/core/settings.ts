@@ -38,6 +38,8 @@ export interface ReaderSettings {
   scanZoom: number
   /** V6.4：划词翻译的目标语言（auto = 英文→中文、中文→英文） */
   translateTarget: TranslateTarget
+  /** V6.8：TTS 朗读语速档位 */
+  ttsRate: TtsRate
 }
 
 export const FONT_MIN = 14
@@ -132,6 +134,24 @@ export function clampTranslateTarget(v: unknown): TranslateTarget {
   return TRANSLATE_TARGETS.includes(v as TranslateTarget) ? (v as TranslateTarget) : 'auto'
 }
 
+// ---------- V6.8 TTS 朗读语速 ----------
+
+export const TTS_RATE_STEPS = [0.75, 1, 1.25, 1.5, 2] as const
+export type TtsRate = (typeof TTS_RATE_STEPS)[number]
+export const TTS_RATE_DEFAULT: TtsRate = 1
+export const TTS_RATE_LABELS: Record<TtsRate, string> = {
+  0.75: '0.75×',
+  1: '1×',
+  1.25: '1.25×',
+  1.5: '1.5×',
+  2: '2×',
+}
+
+/** 目标语速只接受合法档位，其余回退 1×（兼容旧数据）。 */
+export function clampTtsRate(v: unknown): TtsRate {
+  return TTS_RATE_STEPS.includes(v as TtsRate) ? (v as TtsRate) : TTS_RATE_DEFAULT
+}
+
 const STORAGE_KEY = 'xifeng.settings'
 
 export function clampFontSize(size: number): number {
@@ -159,6 +179,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
     pageMode: PAGE_MODE_DEFAULT,
     scanZoom: SCAN_ZOOM_DEFAULT,
     translateTarget: 'auto',
+    ttsRate: TTS_RATE_DEFAULT,
   }
   try {
     const raw = storage.getItem(STORAGE_KEY)
@@ -197,6 +218,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'> = localStorage): 
           : fallback.pageMode,
         scanZoom: clampScanZoom(Number(p.scanZoom)),
         translateTarget: clampTranslateTarget(p.translateTarget),
+        ttsRate: clampTtsRate(p.ttsRate),
       }
     }
   } catch {

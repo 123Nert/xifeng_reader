@@ -3,15 +3,19 @@ import {
   getBook,
   listHighlightsAll,
   listLibrary,
+  listReviewDays,
   listVocabAll,
   reviewVocab,
   type LibraryEntry,
 } from '../core/bookRepository'
+import { speakText } from '../core/speech'
+import { retentionEstimate, type VocabRecord } from '../core/vocabulary'
 import {
   buildStudyMaterials,
   filterStudyMaterials,
   studyMaterialsToCsv,
   studyMaterialsToMarkdown,
+  summarizeReview,
   type StudyMaterial,
   type StudyMaterialType,
 } from '../core/studyMaterials'
@@ -31,8 +35,26 @@ function downloadFile(name: string, content: string, type: string) {
 }
 
 function dueLabel(item: StudyMaterial, now: number): string {
+  if (item.reviewStep != null && item.reviewStep >= 6) return '已掌握'
   if (item.dueAt == null || item.dueAt <= now) return '待复习'
   return `下次：${new Date(item.dueAt).toLocaleDateString()}`
+}
+
+/** 生词卡上的记忆强度（艾宾浩斯留存率展示，V6.8）。 */
+function strengthPercent(item: StudyMaterial, now: number): number {
+  return retentionEstimate({
+    word: item.word ?? '',
+    bookId: item.bookId,
+    charIndex: item.charIndex,
+    excerpt: item.text,
+    gloss: item.gloss ?? '',
+    lookups: 1,
+    createdAt: item.createdAt,
+    lastLookupAt: item.createdAt,
+    reviewStep: item.reviewStep,
+    dueAt: item.dueAt,
+    lastReviewedAt: item.lastReviewedAt,
+  }, now)
 }
 
 export default function StudyMaterialsPage({ onBack, onOpenReader }: Props) {
@@ -46,6 +68,9 @@ export default function StudyMaterialsPage({ onBack, onOpenReader }: Props) {
   const [query, setQuery] = useState('')
   const [dueOnly, setDueOnly] = useState(false)
   const [now, setNow] = useState(Date.now())
+  /** V6.8：复习统计（今日到期 / 已掌握 / 连续天数）的数据源 */
+  const [vocabRecords, setVocabRecords] = useState<VocabRecord[]>([])
+  const [reviewDays, setReviewDays] = useState<string[]>([])
 
   async function refresh() {
     setLoading(true)
@@ -54,6 +79,8 @@ export default function StudyMaterialsPage({ onBack, onOpenReader }: Props) {
       const [books, highlights, vocabulary] = await Promise.all([
         listLibrary(), listHighlightsAll(), listVocabAll(),
       ])
+      setVocabRecords(vocabulary)
+      setReviewDays(await listReviewDays())
       const fullBooks = await Promise.all(books.map((book) => getBook(book.id)))
       setLibrary(books)
       setItems(buildStudyMaterials(
@@ -95,6 +122,12 @@ export default function StudyMaterialsPage({ onBack, onOpenReader }: Props) {
     now,
   }), [bookId, chapter, dueOnly, items, now, query, type])
 
+  /** V6.8：全局复习统计（不随书籍筛选变化——连续天数/掌握数是学习者的整体进度） */
+  const reviewSummary = useMemo(
+    () => summarizeReview(vocabRecords, reviewDays, new Date(now)),
+    [vocabRecords, reviewDays, now],
+  )
+
   async function review(item: StudyMaterial, remembered: boolean) {
     if (!item.word) return
     await reviewVocab(item.word, remembered)
@@ -122,6 +155,13 @@ export default function StudyMaterialsPage({ onBack, onOpenReader }: Props) {
           )}>导出 CSV</button>
         </div>
       </header>
+
+      <div className="study-summary">
+        <span>今日到期 <strong>{reviewSummary.dueCount}</strong></span>
+        <span>学习中 <strong>{reviewSummary.learningCount}</strong></span>
+        <span>已掌握 <strong>{reviewSummary.masteredCount}</strong></span>
+        <span>连续复习 <strong>{reviewSummary.streakDays}</strong> 天</span>
+      </div>
 
       <div className="study-toolbar">
         <input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索原文、笔记、生词或释义" />
@@ -159,11 +199,25 @@ export default function StudyMaterialsPage({ onBack, onOpenReader }: Props) {
             <p className="study-quote">{item.text}</p>
             {item.note && <p className="study-note">{item.note}</p>}
           </> : <>
-            <h2 className="study-word">{item.word}<span>{item.gloss}</span></h2>
+            <h2 className="study-word">
+              {item.word}
+              <button
+                className="btn chip vocab-speak"
+                title="朗读单词（V6.8）"
+                onClick={() => speakText(item.word ?? '')}
+              >
+                🔊
+              </button>
+              <span>{item.gloss}</span>
+            </h2>
+            <p className="study-strength">
+              记忆强度 ≈ {strengthPercent(item, now)}%
+              {item.reviewStep != null && item.reviewStep > 0 && ` · 第 ${item.reviewStep}/6 级`}
+            </p>
             {item.context && <p className="study-note">{item.context}</p>}
             {item.text && <p className="study-quote">{item.text}</p>}
             <div className="study-review-actions">
-              <button className="btn chip" onClick={() => void review(item, false)}>再复习（明天）</button>
+              <button className="btn chip" onClick={() => void review(item, false)}>没记住（明天再来）</button>
               <button className="btn chip primary" onClick={() => void review(item, true)}>记住了</button>
             </div>
           </>}

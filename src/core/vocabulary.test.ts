@@ -9,9 +9,11 @@ import {
   CONTEXT_MAX_CHARS,
   isVocabCandidate,
   isVocabDue,
+  isVocabMastered,
   mergeVocabOnRecollection,
   normalizeVocabRecord,
   normalizeWord,
+  retentionEstimate,
   reviewVocabRecord,
   vocabToCsv,
   vocabToMarkdown,
@@ -69,26 +71,53 @@ describe('vocabulary: 多出处兼容与复习排期', () => {
     expect(third.sources?.some((source) => source.bookId === 'b2')).toBe(true)
   })
 
-  it('记住后按 1、3、7、14、30 天递进并封顶', () => {
+  it('记住后按艾宾浩斯周期 1、2、4、7、15、30 天递进并毕业', () => {
     let record = normalizeVocabRecord(legacy)
-    const intervals = [1, 3, 7, 14, 30]
+    const intervals = [1, 2, 4, 7, 15, 30]
     let now = 1000
-    for (const days of intervals) {
+    for (let i = 0; i < intervals.length; i++) {
       record = reviewVocabRecord(record, true, now)
-      expect(record.dueAt).toBe(now + days * 86400000)
+      expect(record.reviewStep).toBe(i + 1)
+      expect(record.dueAt).toBe(now + intervals[i] * 86400000)
       now += 100
     }
+    // 六次记住后毕业（走完 1/2/4/7/15/30 全部周期），退出待复习队列
+    expect(record.reviewStep).toBe(6)
+    expect(isVocabMastered(record)).toBe(true)
+    expect(isVocabDue(record, now + 100 * 86400000)).toBe(false)
+    // 毕业后再复习只走 90 天维护间隔
     record = reviewVocabRecord(record, true, now)
-    expect(record.dueAt).toBe(now + 30 * 86400000)
+    expect(record.dueAt).toBe(now + 90 * 86400000)
   })
 
-  it('再复习重置进度并安排次日到期', () => {
+  it('忘了回退 2 级（不归零）并安排次日到期', () => {
     const record = reviewVocabRecord({ ...legacy, reviewStep: 3 }, false, 5000)
-    expect(record.reviewStep).toBe(0)
+    expect(record.reviewStep).toBe(1)
     expect(record.dueAt).toBe(5000 + 86400000)
     expect(record.lastReviewedAt).toBe(5000)
     expect(isVocabDue(record, record.dueAt! - 1)).toBe(false)
     expect(isVocabDue(record, record.dueAt!)).toBe(true)
+  })
+
+  it('低级别遗忘退到 0 级（下限保护）', () => {
+    const record = reviewVocabRecord({ ...legacy, reviewStep: 1 }, false, 5000)
+    expect(record.reviewStep).toBe(0)
+  })
+
+  it('留存率按 e^(-t/S) 衰减，复习后回满', () => {
+    // 第 0 级新词（S=1 天）：收藏 1 天后留存 ≈ 37%
+    const fresh = { ...legacy, reviewStep: 0, lastReviewedAt: undefined } as VocabRecord
+    const day1 = retentionEstimate(fresh, legacy.createdAt + 86400000)
+    expect(day1).toBeGreaterThanOrEqual(36)
+    expect(day1).toBeLessThanOrEqual(38)
+    // 刚复习完留存回满 100%
+    expect(retentionEstimate({ ...legacy, reviewStep: 0, lastReviewedAt: 1000 }, 1000)).toBe(100)
+    // 高级别词衰减慢（S=30 天，10 天后 ≈ 72%）
+    const senior = { ...legacy, reviewStep: 5, lastReviewedAt: 1000 }
+    expect(retentionEstimate(senior, 1000 + 10 * 86400000)).toBeGreaterThanOrEqual(71)
+    expect(retentionEstimate(senior, 1000 + 10 * 86400000)).toBeLessThanOrEqual(73)
+    // 毕业词（S=90 天）几乎不衰减
+    expect(retentionEstimate({ ...legacy, reviewStep: 6, lastReviewedAt: 1000 }, 1000 + 10 * 86400000)).toBeGreaterThanOrEqual(88)
   })
 })
 

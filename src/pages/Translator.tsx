@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { isWordLookup, splitWords, type TranslationResult } from '../core/translate'
+import { speakText } from '../core/speech'
 
 export interface TranslateState {
   /** 选中的原文 */
@@ -119,6 +120,13 @@ export function TranslateCard({
       <div className="tr-actions">
         {state.result && (
           <>
+            <button
+              className="sel-btn"
+              title="朗读原文（V6.8，语速跟随全局设置）"
+              onClick={() => speakText(state.source)}
+            >
+              🔊 读音
+            </button>
             {wordMode && onSaveVocab && (
               <button
                 className={`sel-btn${state.vocabSaved ? ' active' : ''}`}
